@@ -25,13 +25,8 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
         run: |
-          set -x
-          pwd
-          go version
-          ls
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/proxdns .
-          ls -la dist/ || echo "NO dist dir"
-          tar -czf proxdnx-linux-${{ matrix.arch }}.tar.gz -C dist proxdnx
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o proxdnx .
+          tar -czf proxdnx-linux-${{ matrix.arch }}.tar.gz proxdnx
           # hash next to the file we just created — no cross-job glob guessing
           sha256sum proxdnx-linux-${{ matrix.arch }}.tar.gz > checksums-${{ matrix.arch }}.txt
 
