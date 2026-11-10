@@ -116,7 +116,9 @@ func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
 // applyCaddy renders the Caddyfile and reloads caddy when it changed.
 // TLS uses Caddy's internal CA (no public CA can issue for .local); every site
 // label is https:// so caddy binds 443 and auto-redirects 80.
-func applyCaddy(logger *log.Logger, recs []Record) error {
+// proxdnx.local is added as the portal: it proxies to this daemon's API, which
+// serves the apps dashboard.
+func applyCaddy(logger *log.Logger, recs []Record, apiAddr string) error {
 	sites := dedupeSites(recs)
 	if len(sites) == 0 {
 		logger.Printf("caddy: no records — Caddyfile left untouched")
@@ -132,7 +134,7 @@ func applyCaddy(logger *log.Logger, recs []Record) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s (ProxDnx)\n", managedBy)
 	// no timestamps in rendered output: keeps cycles idempotent (no rewrite churn)
-	fmt.Fprintf(&b, "# %d sites\n\n", len(sites))
+	fmt.Fprintf(&b, "# %d apps + portal\n\n", len(sites))
 	b.WriteString("{\n    local_certs\n}\n")
 	slugs := make([]string, 0, len(sites))
 	for s := range sites {
@@ -143,6 +145,8 @@ func applyCaddy(logger *log.Logger, recs []Record) error {
 		r := sites[s]
 		fmt.Fprintf(&b, "\nhttps://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
 	}
+	// portal: apps dashboard served by this daemon's API server
+	fmt.Fprintf(&b, "\nhttps://proxdnx.local {\n    reverse_proxy %s\n}\n", apiAddr)
 	content := b.String()
 	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
 		logger.Printf("caddy: unchanged (%d sites)", len(sites))
@@ -238,6 +242,8 @@ func applyAvahi(logger *log.Logger, recs []Record, bridge string) error {
 	for _, s := range slugs {
 		fmt.Fprintf(&ab, "%s.local %s\n", s, host)
 	}
+	// portal alias: the dashboard itself (served by caddy -> daemon API)
+	fmt.Fprintf(&ab, "proxdnx.local %s\n", host)
 	aliasesChanged, err := writeIfChanged(avahiAliases, ab.String(), 0o644)
 	if err != nil {
 		return err

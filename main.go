@@ -219,6 +219,10 @@ func loadEffectiveConfig() (Config, error) {
 
 func (a *App) serveAPI() error {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, portalHTML)
+	})
 	mux.HandleFunc("GET /api/domains", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -299,7 +303,7 @@ func (a *App) cycle(ctx context.Context) error {
 	// render + apply; a writer failure is logged, not fatal — the daemon and
 	// API keep serving the last known good state.
 	if a.cfg.Caddy {
-		if err := applyCaddy(a.log, recs); err != nil {
+		if err := applyCaddy(a.log, recs, a.cfg.APIAddr); err != nil {
 			a.log.Printf("caddy: apply failed: %v", err)
 		}
 	}
