@@ -113,11 +113,34 @@ func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
 	return true, nil
 }
 
+// hostLabel returns the sanitized short hostname used to derive the portal
+// names <host>.local and apps.<host>.local. Falls back to "proxdnx".
+func hostLabel() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "proxdnx"
+	}
+	h = strings.ToLower(strings.TrimSpace(h))
+	if i := strings.Index(h, "."); i >= 0 {
+		h = h[:i]
+	}
+	var b strings.Builder
+	for _, r := range h {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	if s := strings.Trim(b.String(), "-"); s != "" {
+		return s
+	}
+	return "proxdnx"
+}
+
 // applyCaddy renders the Caddyfile and reloads caddy when it changed.
 // TLS uses Caddy's internal CA (no public CA can issue for .local); every site
 // label is https:// so caddy binds 443 and auto-redirects 80.
-// proxdnx.local is added as the portal: it proxies to this daemon's API, which
-// serves the apps dashboard.
+// the portal names <host>.local and apps.<host>.local are added: they proxy to
+// this daemon's API, which serves the apps dashboard.
 func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled bool) error {
 	sites := dedupeSites(recs)
 	if len(sites) == 0 {
@@ -149,10 +172,15 @@ func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled b
 			fmt.Fprintf(&b, "\nhttp://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
 		}
 	}
-	// portal: apps dashboard served by this daemon's API server
-	fmt.Fprintf(&b, "\nhttps://proxdnx.local {\n    reverse_proxy %s\n}\n", apiAddr)
+	// portal: apps dashboard served by this daemon's API server.
+	// <host>.local is announced by the OS avahi daemon (the host's own name —
+	// never publish it here: re-announcing it with a different A record
+	// triggers an avahi conflict rename); apps.<host>.local is published by
+	// proxdnx-mdns-publish via the alias list below.
+	h := hostLabel()
+	fmt.Fprintf(&b, "\nhttps://%s.local, https://apps.%s.local {\n    reverse_proxy %s\n}\n", h, h, apiAddr)
 	if httpEnabled {
-		fmt.Fprintf(&b, "\nhttp://proxdnx.local {\n    reverse_proxy %s\n}\n", apiAddr)
+		fmt.Fprintf(&b, "\nhttp://%s.local, http://apps.%s.local {\n    reverse_proxy %s\n}\n", h, h, apiAddr)
 	}
 	content := b.String()
 	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
@@ -249,8 +277,10 @@ func applyAvahi(logger *log.Logger, recs []Record, bridge string) error {
 	for _, s := range slugs {
 		fmt.Fprintf(&ab, "%s.local %s\n", s, host)
 	}
-	// portal alias: the dashboard itself (served by caddy -> daemon API)
-	fmt.Fprintf(&ab, "proxdnx.local %s\n", host)
+	// portal alias: apps dashboard, reachable as apps.<host>.local (caddy ->
+	// daemon API). <host>.local itself needs no record: the OS avahi daemon
+	// already announces the host's own name on every link.
+	fmt.Fprintf(&ab, "apps.%s.local %s\n", hostLabel(), host)
 	aliasesChanged, err := writeIfChanged(avahiAliases, ab.String(), 0o644)
 	if err != nil {
 		return err

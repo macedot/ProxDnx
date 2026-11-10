@@ -1,6 +1,7 @@
 package main
 
-// Portal page served at https://proxdnx.local — a clean dashboard of every
+// Portal page served at https://<host>.local and https://apps.<host>.local — a
+// clean dashboard of every
 // published service (ProxMenux-style dark card grid). The page fetches
 // /api/domains live, so data is always current with zero file churn.
 
