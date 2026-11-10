@@ -20,6 +20,10 @@ Auth is optional: if the monitor has auth disabled, plain requests work.
   --output FILE               write [{"name","service","ip","port"}, ...] JSON — name is the LXC
                               hostname, service is the ProxMenux Apps service name (falls back to
                               the hostname); guests without a matched IP or ports are omitted
+  --caddy                     generate /etc/caddy/Caddyfile (<slug>.local -> reverse_proxy) and
+                              reload caddy; caddy must be running
+  --avahi                     generate /etc/avahi/services/<slug>.service per app and reload
+                              avahi-daemon; avahi-daemon must be running
   --scan                      force fresh docker/native discovery scans (slower)
   --all                       include non-running guests
   --only 100,109              restrict to these VMIDs
@@ -30,12 +34,64 @@ import argparse
 import ipaddress
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from xml.sax.saxutils import escape as xml_escape
 
-UA = "proxmenux-lxc-ports/1.1"
+UA = "proxmenux-lxc-ports/1.2"
+MANAGED_BY = "managed by proxdns (proxmenux-lxc-ports.py)"
+CADDYFILE = "/etc/caddy/Caddyfile"
+AVAHI_SERVICES_DIR = "/etc/avahi/services"
+AVAHI_ALIASES = "/etc/avahi/proxdns-aliases.conf"
+AVAHI_PUBLISHER_UNIT = "/etc/systemd/system/proxdns-mdns.service"
+AVAHI_PUBLISHER_BIN = "/usr/local/bin/proxdns-mdns-publish"
+AVAHI_PUBLISHER_BIN_SRC = """#!/bin/bash
+# {marker}
+# publishes one A record per line of {aliases} via avahi-publish
+ALIASES="{aliases}"
+PIDS=()
+while read -r name ip; do
+    [ -z "$name" ] && continue
+    case "$name" in "#"*) continue ;; esac
+    [ -z "$ip" ] && continue
+    avahi-publish -a -R "$name" "$ip" &
+    PIDS+=("$!")
+done < "$ALIASES"
+wait
+""".format(marker=MANAGED_BY, aliases=AVAHI_ALIASES)
+AVAHI_PUBLISHER_UNIT_SRC = """[Unit]
+Description=ProxDNS mDNS alias publisher (avahi-publish per *.local name)
+After=avahi-daemon.service
+Requires=avahi-daemon.service
+
+[Service]
+Type=simple
+ExecStart={bin}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+""".format(bin=AVAHI_PUBLISHER_BIN)
+CADDY_MARKER = "# " + MANAGED_BY
+AVAHI_MARKER = MANAGED_BY  # used inside <!-- --> template comment; must not contain "-->"
+
+AVAHI_TEMPLATE = """<?xml version="1.0" standalone='no'?>
+<!-- {marker} generated {ts} -->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">{name}</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>{port}</port>
+  </service>
+</service-group>
+"""
 
 
 def http_json(url, method="GET", payload=None, token=None, timeout=10):
@@ -108,6 +164,168 @@ def pick_ip_in_subnet(ips, subnet):
     return None
 
 
+def slugify(name):
+    """AdGuard Home -> adguard-home; valid as mDNS/Caddy label."""
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s or "app"
+
+
+def require_active(unit):
+    """The flag asserts the service must be running; refuse otherwise."""
+    r = subprocess.run(["systemctl", "is-active", "--quiet", unit])
+    if r.returncode != 0:
+        sys.exit("%s: service is not running — start it (systemctl start %s) before using this flag" % (unit, unit))
+
+
+def dedupe_sites(records):
+    """One site per slug (slugified service name); first record wins."""
+    sites = {}
+    for r in records:
+        base = slugify(r["service"])
+        s, n = base, 2
+        while s in sites:
+            s = "%s-%d" % (base, n)
+            n += 1
+        sites[s] = r
+    return sites
+
+
+def write_caddy(records):
+    sites = dedupe_sites(records)
+    if not sites:
+        print("caddy: no records — Caddyfile left untouched", file=sys.stderr)
+        return
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    if os.path.exists(CADDYFILE):
+        with open(CADDYFILE) as f:
+            cur = f.read()
+        if cur.strip() and CADDY_MARKER not in cur:
+            bak = "%s.pre-proxdns-%s" % (CADDYFILE, time.strftime("%Y%m%d-%H%M%S"))
+            shutil.copy2(CADDYFILE, bak)
+            print("caddy: existing unmanaged Caddyfile backed up -> %s" % bak, file=sys.stderr)
+    out = [CADDY_MARKER, "# generated %s from %d records" % (ts, len(sites)), "", "{", "    auto_https off", "}"]
+    for s in sorted(sites):
+        r = sites[s]
+        # explicit http:// scheme -> caddy binds :80; bare labels default to :443
+        # even with auto_https off
+        out += ["", "http://%s.local {" % s, "    reverse_proxy %s:%d" % (r["ip"], r["port"]), "}"]
+    tmp = CADDYFILE + ".tmp-proxdns"
+    with open(tmp, "w") as f:
+        f.write("\n".join(out) + "\n")
+    chk = subprocess.run(["caddy", "validate", "--config", tmp, "--adapter", "caddyfile"],
+                         capture_output=True, text=True)
+    if chk.returncode != 0:
+        os.unlink(tmp)
+        sys.exit("caddy: generated config failed validation:\n%s" % (chk.stderr or chk.stdout)[-800:])
+    os.replace(tmp, CADDYFILE)
+    rel = subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, text=True)
+    if rel.returncode != 0:
+        sys.exit("caddy: reload failed: %s" % rel.stderr.strip())
+    print("caddy: wrote %s (%d sites) and reloaded" % (CADDYFILE, len(sites)))
+
+
+def get_host_ip(bridge):
+    """First non-loopback IPv4 of the host bridge (mDNS aliases point here, at caddy)."""
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "-o", "addr", "show", "dev", bridge], text=True, timeout=5)
+        for line in out.splitlines():
+            for p in line.split():
+                if "/" in p and p.count(".") == 3:
+                    iface = ipaddress.IPv4Interface(p)
+                    if not iface.ip.is_loopback:
+                        return str(iface.ip)
+    except Exception:
+        pass
+    return None
+
+
+def write_avahi(records, bridge="vmbr0"):
+    sites = dedupe_sites(records)
+    if not sites:
+        print("avahi: no records — nothing written", file=sys.stderr)
+        return
+    os.makedirs(AVAHI_SERVICES_DIR, exist_ok=True)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    want = set()
+    for s, r in sorted(sites.items()):
+        fname = "%s.service" % s
+        want.add(fname)
+        path = os.path.join(AVAHI_SERVICES_DIR, fname)
+        content = AVAHI_TEMPLATE.format(marker=AVAHI_MARKER, ts=ts,
+                                        name=xml_escape(r["service"]), port=r["port"])
+        with open(path, "w") as f:
+            f.write(content)
+    removed = []
+    for f in sorted(os.listdir(AVAHI_SERVICES_DIR)):
+        if not f.endswith(".service") or f in want:
+            continue
+        path = os.path.join(AVAHI_SERVICES_DIR, f)
+        with open(path) as fh:
+            cur = fh.read()
+        if AVAHI_MARKER in cur:
+            os.unlink(path)
+            removed.append(f)
+        else:
+            print("avahi: left unmanaged file %s" % f, file=sys.stderr)
+    rel = subprocess.run(["systemctl", "reload", "avahi-daemon"], capture_output=True, text=True)
+    if rel.returncode != 0:
+        sys.exit("avahi-daemon: reload failed: %s" % rel.stderr.strip())
+    msg = "avahi: wrote %d service files in %s and reloaded" % (len(want), AVAHI_SERVICES_DIR)
+    if removed:
+        msg += " (removed stale: %s)" % ", ".join(removed)
+    print(msg)
+
+    # *.local A records -> host IP (caddy routes by Host header); without this,
+    # service files only make apps browsable, <slug>.local does not resolve.
+    host_ip = get_host_ip(bridge)
+    if not host_ip:
+        sys.exit("avahi: could not determine host IPv4 on %s for alias publishing" % bridge)
+    lines = ["# %s" % MANAGED_BY, "# generated %s" % ts,
+             "# all aliases point at the host so caddy can route by Host header"]
+    lines += ["%s.local %s" % (s, host_ip) for s in sorted(sites)]
+    body = "\n".join(lines) + "\n"
+    alias_changed = True
+    if os.path.exists(AVAHI_ALIASES):
+        with open(AVAHI_ALIASES) as f:
+            alias_changed = f.read() != body
+    if alias_changed:
+        with open(AVAHI_ALIASES, "w") as f:
+            f.write(body)
+    unit_changed = True
+    if os.path.exists(AVAHI_PUBLISHER_UNIT):
+        with open(AVAHI_PUBLISHER_UNIT) as f:
+            unit_changed = f.read() != AVAHI_PUBLISHER_UNIT_SRC
+    if unit_changed:
+        with open(AVAHI_PUBLISHER_UNIT, "w") as f:
+            f.write(AVAHI_PUBLISHER_UNIT_SRC)
+    bin_changed = True
+    if os.path.exists(AVAHI_PUBLISHER_BIN):
+        with open(AVAHI_PUBLISHER_BIN) as f:
+            bin_changed = f.read() != AVAHI_PUBLISHER_BIN_SRC
+    if bin_changed:
+        with open(AVAHI_PUBLISHER_BIN, "w") as f:
+            f.write(AVAHI_PUBLISHER_BIN_SRC)
+        os.chmod(AVAHI_PUBLISHER_BIN, 0o755)
+    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+    subprocess.run(["systemctl", "enable", "--quiet", "proxdns-mdns"], capture_output=True)
+    if alias_changed or unit_changed or bin_changed:
+        rel2 = subprocess.run(["systemctl", "restart", "proxdns-mdns"], capture_output=True, text=True)
+        if rel2.returncode != 0:
+            sys.exit("proxdns-mdns: restart failed: %s" % rel2.stderr.strip())
+        time.sleep(1)
+        alive = subprocess.run(["systemctl", "is-active", "--quiet", "proxdns-mdns"])
+        if alive.returncode != 0:
+            sys.exit("proxdns-mdns: exited immediately — check journalctl -u proxdns-mdns "
+                     "(avahi may refuse A-record publishing)")
+        print("avahi: %d *.local aliases -> %s via proxdns-mdns (restarted)" % (len(sites), host_ip))
+    else:
+        st = subprocess.run(["systemctl", "is-active", "--quiet", "proxdns-mdns"])
+        if st.returncode != 0:
+            sys.exit("proxdns-mdns: unit not running despite no changes — check journalctl -u proxdns-mdns")
+        print("avahi: %d *.local aliases -> %s unchanged (proxdns-mdns running)" % (len(sites), host_ip))
+
+
 def collect_ports(base, token, vmid, scan):
     """Return list of {source, name, port} entries for one guest."""
     found = []
@@ -151,6 +369,10 @@ def main():
     ap.add_argument("--bridge", default="vmbr0", help="host bridge to match subnets against (default vmbr0)")
     ap.add_argument("--network", default=None, help="explicit CIDR override, e.g. 10.4.2.0/24")
     ap.add_argument("--output", default=None, help="write [{name,service,ip,port}] JSON to FILE")
+    ap.add_argument("--caddy", action="store_true",
+                    help="generate /etc/caddy/Caddyfile (<slug>.local reverse_proxy) and reload caddy")
+    ap.add_argument("--avahi", action="store_true",
+                    help="generate /etc/avahi/services/<slug>.service per app and reload avahi-daemon")
     ap.add_argument("--scan", action="store_true", help="force fresh discovery scans (POST)")
     ap.add_argument("--all", action="store_true", help="include non-running guests")
     ap.add_argument("--only", default="", help="comma-separated VMID filter")
@@ -161,6 +383,10 @@ def main():
     token = args.token
     if not token and (args.user or args.password or os.environ.get("PROXMENUX_USER")):
         token = acquire_token(base, args)
+    if args.caddy:
+        require_active("caddy")
+    if args.avahi:
+        require_active("avahi-daemon")
 
     if args.network:
         try:
@@ -211,6 +437,20 @@ def main():
     rows.sort(key=lambda r: r["vmid"] or 0)
     records.sort(key=lambda r: (r["name"], r["port"]))
 
+    # one record per (ip, port): discovery sources can overlap
+    seen = set()
+    dedup = []
+    for r in records:
+        k = (r["ip"], r["port"])
+        if k not in seen:
+            seen.add(k)
+            dedup.append(r)
+    records = dedup
+
+    if args.caddy:
+        write_caddy(records)
+    if args.avahi:
+        write_avahi(records, args.bridge)
     if args.output:
         with open(args.output, "w") as f:
             json.dump(records, f, indent=2)
