@@ -26,12 +26,16 @@ jobs:
           GOARCH: ${{ matrix.arch }}
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/proxdns .
-          tar -czf proxdns-linux-${{ matrix.arch }}.tar.gz -C dist proxdns
+          tar -czf proxdnx-linux-${{ matrix.arch }}.tar.gz -C dist proxdnx
+          # hash next to the file we just created — no cross-job glob guessing
+          sha256sum proxdnx-linux-${{ matrix.arch }}.tar.gz > checksums-${{ matrix.arch }}.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: proxdns-linux-${{ matrix.arch }}
-          path: proxdns-linux-${{ matrix.arch }}.tar.gz
+          name: proxdnx-linux-${{ matrix.arch }}
+          path: |
+            proxdnx-linux-${{ matrix.arch }}.tar.gz
+            checksums-${{ matrix.arch }}.txt
 
   release:
     needs: build
@@ -41,8 +45,11 @@ jobs:
         with:
           merge-multiple: true
 
-      - name: Checksums
-        run: sha256sum proxdnx-linux-*.tar.gz > checksums.txt
+      - name: Merge checksums
+        run: |
+          ls -la
+          cat checksums-amd64.txt checksums-arm64.txt > checksums.txt
+          cat checksums.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
