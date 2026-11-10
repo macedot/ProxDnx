@@ -11,7 +11,7 @@ import (
 )
 
 const avahiTemplate = `<?xml version="1.0" standalone='no'?>
-<!-- managed by proxdns (ProxDnx) -->
+<!-- managed by proxdnx (ProxDnx) -->
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
   <name replace-wildcards="yes">%s</name>
@@ -23,9 +23,9 @@ const avahiTemplate = `<?xml version="1.0" standalone='no'?>
 `
 
 const publisherBinSrc = `#!/bin/bash
-# managed by proxdns (ProxDnx)
-# publishes one A record per line of /etc/avahi/proxdns-aliases.conf via avahi-publish
-ALIASES="/etc/avahi/proxdns-aliases.conf"
+# managed by proxdnx (ProxDnx)
+# publishes one A record per line of /etc/avahi/proxdnx-aliases.conf via avahi-publish
+ALIASES="/etc/avahi/proxdnx-aliases.conf"
 while read -r name ip; do
     [ -z "$name" ] && continue
     case "$name" in "#"*) continue ;; esac
@@ -42,7 +42,7 @@ Requires=avahi-daemon.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/proxdns-mdns-publish
+ExecStart=/usr/local/bin/proxdnx-mdns-publish
 Restart=on-failure
 RestartSec=3
 
@@ -100,7 +100,7 @@ func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
 	if cur, err := os.ReadFile(path); err == nil && string(cur) == content {
 		return false, nil
 	}
-	tmp := path + ".tmp-proxdns"
+	tmp := path + ".tmp-proxdnx"
 	if err := os.WriteFile(tmp, []byte(content), perm); err != nil {
 		return false, err
 	}
@@ -125,8 +125,8 @@ func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled b
 		return nil
 	}
 	cur, _ := os.ReadFile(caddyfile)
-	if len(strings.TrimSpace(string(cur))) > 0 && !strings.Contains(string(cur), managedBy) {
-		bak := fmt.Sprintf("%s.pre-proxdns-%s", caddyfile, time.Now().Format("20060102-150405"))
+	if len(strings.TrimSpace(string(cur))) > 0 && !strings.Contains(string(cur), managedByPrefix) {
+		bak := fmt.Sprintf("%s.pre-proxdnx-%s", caddyfile, time.Now().Format("20060102-150405"))
 		if err := os.WriteFile(bak, cur, 0o644); err == nil {
 			logger.Printf("caddy: existing unmanaged Caddyfile backed up -> %s", bak)
 		}
@@ -159,7 +159,7 @@ func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled b
 		logger.Printf("caddy: unchanged (%d sites)", len(sites))
 		return nil
 	}
-	tmp := caddyfile + ".tmp-proxdns"
+	tmp := caddyfile + ".tmp-proxdnx"
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled b
 }
 
 // applyAvahi writes one .service file per app, the alias list, and manages the
-// proxdns-mdns publisher that turns <slug>.local into A records on the host IP.
+// proxdnx-mdns publisher that turns <slug>.local into A records on the host IP.
 func applyAvahi(logger *log.Logger, recs []Record, bridge string) error {
 	sites := dedupeSites(recs)
 	if len(sites) == 0 {
@@ -221,7 +221,7 @@ func applyAvahi(logger *log.Logger, recs []Record, bridge string) error {
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(cur), managedBy) {
+		if strings.Contains(string(cur), managedByPrefix) {
 			if err := os.Remove(path); err == nil {
 				removed = append(removed, name)
 			}
@@ -264,21 +264,21 @@ func applyAvahi(logger *log.Logger, recs []Record, bridge string) error {
 		return err
 	}
 	_ = run("systemctl", "daemon-reload")
-	_ = run("systemctl", "enable", "--quiet", "proxdns-mdns")
+	_ = run("systemctl", "enable", "--quiet", "proxdnx-mdns")
 	if aliasesChanged || unitChanged || binChanged {
-		if err := run("systemctl", "restart", "proxdns-mdns"); err != nil {
-			return fmt.Errorf("proxdns-mdns restart failed: %v", err)
+		if err := run("systemctl", "restart", "proxdnx-mdns"); err != nil {
+			return fmt.Errorf("proxdnx-mdns restart failed: %v", err)
 		}
 		time.Sleep(time.Second)
-		if err := run("systemctl", "is-active", "--quiet", "proxdns-mdns"); err != nil {
-			return fmt.Errorf("proxdns-mdns exited immediately — check journalctl -u proxdns-mdns")
+		if err := run("systemctl", "is-active", "--quiet", "proxdnx-mdns"); err != nil {
+			return fmt.Errorf("proxdnx-mdns exited immediately — check journalctl -u proxdnx-mdns")
 		}
-		logger.Printf("avahi: %d *.local aliases -> %s via proxdns-mdns (restarted)", len(sites), host)
+		logger.Printf("avahi: %d *.local aliases -> %s via proxdnx-mdns (restarted)", len(sites), host)
 	} else {
-		if err := run("systemctl", "is-active", "--quiet", "proxdns-mdns"); err != nil {
-			return fmt.Errorf("proxdns-mdns not running despite no changes — check journalctl -u proxdns-mdns")
+		if err := run("systemctl", "is-active", "--quiet", "proxdnx-mdns"); err != nil {
+			return fmt.Errorf("proxdnx-mdns not running despite no changes — check journalctl -u proxdnx-mdns")
 		}
-		logger.Printf("avahi: %d *.local aliases -> %s unchanged (proxdns-mdns running)", len(sites), host)
+		logger.Printf("avahi: %d *.local aliases -> %s unchanged (proxdnx-mdns running)", len(sites), host)
 	}
 	return nil
 }

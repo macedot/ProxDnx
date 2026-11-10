@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | b
 
 ## 📌 How to Use
 
-Once installed, ProxDns runs as a systemd daemon and needs no interaction.
+Once installed, ProxDnx runs as a systemd daemon and needs no interaction.
 Every 60 seconds it:
 
 1. Asks ProxMenux for every running LXC and its discovered apps/ports
@@ -65,7 +65,7 @@ Every 60 seconds it:
 4. Updates what changed — and only what changed:
    - `/etc/caddy/Caddyfile` → `https://<service>.local` reverse-proxied to the app (TLS from Caddy's internal CA, `caddy validate` before reload)
    - `/etc/avahi/services/<service>.service` → mDNS advertisement
-   - `proxdns-mdns.service` → publishes `<service>.local` A records via `avahi-publish`
+   - `proxdnx-mdns.service` → publishes `<service>.local` A records via `avahi-publish`
 
 Open any published app from any mDNS-capable device on your LAN:
 
@@ -109,21 +109,21 @@ curl http://<your-proxmox-ip>:9973/api/domains
 | `caddy` / `avahi` | `true` (installer) | Enable each writer |
 | `http` | `true` | Serve plain `http://name.local` on :80 alongside HTTPS (no redirect) |
 | `api_addr` | `127.0.0.1:9973` | API listen address |
-| `log_file` | `/var/log/proxdns/proxdns.log` | Log file (also journald) |
+| `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |
 
 **Useful commands:**
 
 ```bash
 # Check service status
-systemctl status proxdns
+systemctl status proxdnx
 
 # View logs
-tail -f /var/log/proxdns/proxdns.log
-journalctl -u proxdns -n 50
+tail -f /var/log/proxdnx/proxdnx.log
+journalctl -u proxdnx -n 50
 
 # Restart after a config change
-systemctl restart proxdns
+systemctl restart proxdnx
 ```
 
 ---
@@ -132,8 +132,8 @@ systemctl restart proxdns
 
 | Service | Purpose |
 |---|---|
-| `proxdns.service` | The daemon — `Requires=` + `After=` caddy and avahi-daemon |
-| `proxdns-mdns.service` | Publishes `<service>.local` A records via `avahi-publish` |
+| `proxdnx.service` | The daemon — `Requires=` + `After=` caddy and avahi-daemon |
+| `proxdnx-mdns.service` | Publishes `<service>.local` A records via `avahi-publish` |
 
 ---
 
@@ -150,9 +150,9 @@ binary and restarts the service. Your config is never overwritten.
 curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/uninstall.sh | bash
 ```
 
-Removes the services, the binary and every proxdns-managed avahi file.
+Removes the services, the binary and every proxdnx-managed avahi file.
 Kept on purpose: `caddy`, `avahi-daemon`, the generated
-`/etc/caddy/Caddyfile` (with `.pre-proxdns-*` backups), your config and logs.
+`/etc/caddy/Caddyfile` (with `.pre-proxdnx-*` backups), your config and logs.
 
 ---
 

@@ -1,4 +1,4 @@
-// ProxDNS — ProxMenux-driven *.local publisher.
+// ProxDnx — ProxMenux-driven *.local publisher.
 // Queries the ProxMenux monitor API for running LXC guests, derives
 // name/ip/port records, renders the Caddyfile and avahi service files,
 // publishes <slug>.local A records via avahi-publish, and exposes a small
@@ -31,16 +31,18 @@ import (
 )
 
 const (
-	defaultAPIAddr   = "127.0.0.1:9973"
-	defaultLogFile   = "/var/log/proxdns/proxdns.log"
-	defaultBaseURL   = "http://127.0.0.1:8008"
-	defaultInterval  = 60 * time.Second
-	managedBy        = "managed by proxdns"
+	defaultAPIAddr  = "127.0.0.1:9973"
+	defaultLogFile  = "/var/log/proxdnx/proxdnx.log"
+	defaultBaseURL  = "http://127.0.0.1:8008"
+	defaultInterval = 60 * time.Second
+	managedBy       = "managed by ProxDnx"
+	// detection prefix: matches legacy "managed by proxdns" markers too
+	managedByPrefix  = "managed by proxdn"
 	caddyfile        = "/etc/caddy/Caddyfile"
 	avahiServicesDir = "/etc/avahi/services"
-	avahiAliases     = "/etc/avahi/proxdns-aliases.conf"
-	publisherBin     = "/usr/local/bin/proxdns-mdns-publish"
-	publisherUnit    = "/etc/systemd/system/proxdns-mdns.service"
+	avahiAliases     = "/etc/avahi/proxdnx-aliases.conf"
+	publisherBin     = "/usr/local/bin/proxdnx-mdns-publish"
+	publisherUnit    = "/etc/systemd/system/proxdnx-mdns.service"
 )
 
 type Config struct {
@@ -122,10 +124,10 @@ func setupLogging(path string) *log.Logger {
 			if fh, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 				writers = append(writers, fh)
 			} else {
-				fmt.Fprintf(os.Stderr, "proxdns: cannot open log file %s: %v (stdout only)\n", path, err)
+				fmt.Fprintf(os.Stderr, "proxdnx: cannot open log file %s: %v (stdout only)\n", path, err)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "proxdns: cannot create log dir: %v (stdout only)\n", err)
+			fmt.Fprintf(os.Stderr, "proxdnx: cannot create log dir: %v (stdout only)\n", err)
 		}
 	}
 	return log.New(io.MultiWriter(writers...), "", log.LstdFlags)
@@ -136,7 +138,7 @@ func loadEffectiveConfig() (Config, error) {
 
 	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fLog string
 	var fCaddy, fAvahi, fHTTP, fScan, fOnce bool
-	fs := flag.NewFlagSet("proxdns", flag.ContinueOnError)
+	fs := flag.NewFlagSet("proxdnx", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
 	fs.StringVar(&fURL, "url", "", "ProxMenux monitor base URL (env PROXMENUX_URL)")
 	fs.StringVar(&fToken, "token", "", "Bearer token (env PROXMENUX_TOKEN)")
@@ -151,7 +153,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.BoolVar(&fHTTP, "http", false, "serve plain http:// alongside https:// (default: config/http, on)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
-	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdns/proxdns.log)")
+	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
 	fs.BoolVar(&fOnce, "once", false, "run a single cycle and exit")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return c, err
@@ -363,14 +365,14 @@ func (a *App) setStats(s CycleStats) {
 func main() {
 	cfg, err := loadEffectiveConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "proxdns: %v\n", err)
+		fmt.Fprintf(os.Stderr, "proxdnx: %v\n", err)
 		os.Exit(2)
 	}
 	logger := setupLogging(cfg.LogFile)
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdns starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v",
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v",
 		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP)
 
 	if cfg.Caddy {
@@ -431,6 +433,6 @@ func hasOnceFlag() bool {
 }
 
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "proxdns: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "proxdnx: "+format+"\n", args...)
 	os.Exit(2)
 }

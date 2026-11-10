@@ -129,7 +129,7 @@ func saveConfig(path string, c *Config) error {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString("# proxdns configuration (flat YAML subset; read+rewritten by proxdns)\n")
+	b.WriteString("# proxdnx configuration (flat YAML subset; read+rewritten by proxdnx)\n")
 	b.WriteString("# precedence: CLI flags > environment (PROXMENUX_*) > this file > built-in defaults\n")
 	fmt.Fprintf(&b, "url: %s\n", yamlValue(c.BaseURL))
 	fmt.Fprintf(&b, "token: %s\n", yamlValue(c.Token))
@@ -152,7 +152,7 @@ func saveConfig(path string, c *Config) error {
 	return os.Rename(tmp, path)
 }
 
-// applyEnv overlays PROXMENUX_* / PROXDNS_* environment variables.
+// applyEnv overlays PROXMENUX_* / PROXDNX_* environment variables.
 func applyEnv(c *Config) {
 	if v := os.Getenv("PROXMENUX_URL"); v != "" {
 		c.BaseURL = v
@@ -169,7 +169,7 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("PROXMENUX_TOTP"); v != "" {
 		c.TOTP = v
 	}
-	if v := os.Getenv("PROXDNS_NETWORK"); v != "" {
+	if v := os.Getenv("PROXDNX_NETWORK"); v != "" {
 		c.Network = v
 	}
 }

@@ -18,16 +18,16 @@
 # - Ensures the script is run with root privileges.
 # - Detects the architecture (amd64 / arm64) and downloads the
 #   matching GitHub release (or uses --binary for a local file).
-# - Installs the binary to /usr/local/bin/proxdns.
+# - Installs the binary to /usr/local/bin/proxdnx.
 # - Bootstraps the configuration at
 #     • $HOME/.config/proxdnx/config.yaml (only if missing)
 # - Installs the mDNS alias publisher:
-#     • /usr/local/bin/proxdns-mdns-publish
-#     • /etc/systemd/system/proxdns-mdns.service
+#     • /usr/local/bin/proxdnx-mdns-publish
+#     • /etc/systemd/system/proxdnx-mdns.service
 # - Installs the daemon service:
-#     • /etc/systemd/system/proxdns.service
+#     • /etc/systemd/system/proxdnx.service
 #       (Requires= caddy.service + avahi-daemon.service)
-# - Adds log rotation at /etc/logrotate.d/proxdns.
+# - Adds log rotation at /etc/logrotate.d/proxdnx.
 # - Enables and starts both services.
 #
 # Notes:
@@ -39,18 +39,18 @@
 # Usage:
 #   install.sh [-y] [VERSION]        install/upgrade (default: latest release)
 #   install.sh --binary PATH         install a local binary (dev builds)
-#   PROXDNS_REPO=owner/repo          override the GitHub repository
+#   PROXDNX_REPO=owner/repo          override the GitHub repository
 # ==========================================================
 
 # Configuration ============================================
-REPO="${PROXDNS_REPO:-macedot/ProxDnx}"
-BIN="/usr/local/bin/proxdns"
-PUBLISHER_BIN="/usr/local/bin/proxdns-mdns-publish"
-PUBLISHER_UNIT="/etc/systemd/system/proxdns-mdns.service"
-SERVICE_FILE="/etc/systemd/system/proxdns.service"
+REPO="${PROXDNX_REPO:-macedot/ProxDnx}"
+BIN="/usr/local/bin/proxdnx"
+PUBLISHER_BIN="/usr/local/bin/proxdnx-mdns-publish"
+PUBLISHER_UNIT="/etc/systemd/system/proxdnx-mdns.service"
+SERVICE_FILE="/etc/systemd/system/proxdnx.service"
 CONF_DIR="${HOME:-/root}/.config/proxdnx"
 CONF="${CONF_DIR}/config.yaml"
-LOG_DIR="/var/log/proxdns"
+LOG_DIR="/var/log/proxdnx"
 BIN_SRC=""
 VERSION="latest"
 ASSUME_YES=0
@@ -127,7 +127,7 @@ while [ $# -gt 0 ]; do
             echo "  VERSION      release tag (default: latest)"
             echo "  --binary P   install a local binary instead of a release"
             echo "  -y           assume yes, skip confirmation"
-            echo "  env PROXDNS_REPO=owner/repo overrides the repository"
+            echo "  env PROXDNX_REPO=owner/repo overrides the repository"
             exit 0
             ;;
         *)
@@ -157,7 +157,7 @@ for svc in caddy avahi-daemon; do
     if systemctl is-active --quiet "$svc"; then
         msg_ok "$svc is running"
     else
-        msg_warn "$svc is NOT running — proxdns.service Requires it and will not start"
+        msg_warn "$svc is NOT running — proxdnx.service Requires it and will not start"
     fi
 done
 if command -v avahi-publish >/dev/null 2>&1; then
@@ -178,7 +178,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 if [ -n "$BIN_SRC" ]; then
     msg_info "Using local binary: $BIN_SRC"
-    cp "$BIN_SRC" "$TMP/proxdns" || { msg_error "cannot copy $BIN_SRC"; exit 1; }
+    cp "$BIN_SRC" "$TMP/proxdnx" || { msg_error "cannot copy $BIN_SRC"; exit 1; }
 else
     case "$(uname -m)" in
         x86_64)          ARCH=amd64 ;;
@@ -187,9 +187,9 @@ else
     esac
     msg_ok "architecture: $ARCH"
     if [ "$VERSION" = "latest" ]; then
-        URL="https://github.com/${REPO}/releases/latest/download/proxdns-linux-${ARCH}.tar.gz"
+        URL="https://github.com/${REPO}/releases/latest/download/proxdnx-linux-${ARCH}.tar.gz"
     else
-        URL="https://github.com/${REPO}/releases/download/${VERSION}/proxdns-linux-${ARCH}.tar.gz"
+        URL="https://github.com/${REPO}/releases/download/${VERSION}/proxdnx-linux-${ARCH}.tar.gz"
     fi
     msg_info "Downloading ${VERSION}..."
     if command -v curl >/dev/null 2>&1; then
@@ -198,7 +198,7 @@ else
         wget -qO "$TMP/dl.tar.gz" "$URL" || { msg_error "download failed: $URL"; exit 1; }
     fi
     tar -xzf "$TMP/dl.tar.gz" -C "$TMP" || { msg_error "extract failed"; exit 1; }
-    [ -f "$TMP/proxdns" ] || { msg_error "archive missing the proxdns binary"; exit 1; }
+    [ -f "$TMP/proxdnx" ] || { msg_error "archive missing the proxdnx binary"; exit 1; }
     msg_ok "release downloaded"
 fi
 
@@ -211,7 +211,7 @@ fi
 
 # Files ====================================================
 msg_info "Installing binary..."
-install -m 0755 "$TMP/proxdns" "$BIN"
+install -m 0755 "$TMP/proxdnx" "$BIN"
 msg_ok "$BIN"
 
 msg_info "Preparing directories..."
@@ -221,7 +221,7 @@ msg_ok "directories ready"
 if [ ! -f "$CONF" ]; then
     msg_info "Bootstrapping config at $CONF..."
     cat > "$CONF" <<'EOF'
-# proxdns configuration (flat YAML subset; read + rewritten by proxdns)
+# proxdnx configuration (flat YAML subset; read + rewritten by proxdnx)
 # precedence: CLI flags > environment (PROXMENUX_*) > this file > built-in defaults
 url: http://127.0.0.1:8008
 token: ""
@@ -236,10 +236,10 @@ avahi: true
 http: true
 scan: false
 api_addr: 127.0.0.1:9973
-log_file: /var/log/proxdns/proxdns.log
+log_file: /var/log/proxdnx/proxdnx.log
 EOF
     chmod 600 "$CONF"
-    msg_ok "config created (edit to taste; restart proxdns to apply)"
+    msg_ok "config created (edit to taste; restart proxdnx to apply)"
 else
     msg_ok "config kept as-is: $CONF"
 fi
@@ -247,9 +247,9 @@ fi
 msg_info "Installing mDNS alias publisher..."
 cat > "$PUBLISHER_BIN" <<'EOF'
 #!/bin/bash
-# managed by proxdns (ProxDnx)
-# publishes one A record per line of /etc/avahi/proxdns-aliases.conf via avahi-publish
-ALIASES="/etc/avahi/proxdns-aliases.conf"
+# managed by proxdnx (ProxDnx)
+# publishes one A record per line of /etc/avahi/proxdnx-aliases.conf via avahi-publish
+ALIASES="/etc/avahi/proxdnx-aliases.conf"
 while read -r name ip; do
     [ -z "$name" ] && continue
     case "$name" in "#"*) continue ;; esac
@@ -262,13 +262,13 @@ chmod 0755 "$PUBLISHER_BIN"
 
 cat > "$PUBLISHER_UNIT" <<'EOF'
 [Unit]
-Description=ProxDNS mDNS alias publisher (avahi-publish per *.local name)
+Description=ProxDnx mDNS alias publisher (avahi-publish per *.local name)
 After=avahi-daemon.service
 Requires=avahi-daemon.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/proxdns-mdns-publish
+ExecStart=/usr/local/bin/proxdnx-mdns-publish
 Restart=on-failure
 RestartSec=3
 
@@ -277,17 +277,17 @@ WantedBy=multi-user.target
 EOF
 msg_ok "publisher installed"
 
-msg_info "Installing proxdns.service (Requires: caddy + avahi-daemon)..."
+msg_info "Installing proxdnx.service (Requires: caddy + avahi-daemon)..."
 cat > "$SERVICE_FILE" <<'EOF'
 [Unit]
 Description=ProxDnx - ProxMenux driven caddy/avahi *.local publisher
 Wants=network-online.target
-After=network-online.target caddy.service avahi-daemon.service proxdns-mdns.service
+After=network-online.target caddy.service avahi-daemon.service proxdnx-mdns.service
 Requires=caddy.service avahi-daemon.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/proxdns --config /root/.config/proxdnx/config.yaml
+ExecStart=/usr/local/bin/proxdnx --config /root/.config/proxdnx/config.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -297,8 +297,8 @@ EOF
 msg_ok "$SERVICE_FILE"
 
 msg_info "Configuring log rotation..."
-cat > /etc/logrotate.d/proxdns <<'EOF'
-/var/log/proxdns/proxdns.log {
+cat > /etc/logrotate.d/proxdnx <<'EOF'
+/var/log/proxdnx/proxdnx.log {
     weekly
     rotate 8
     compress
@@ -308,19 +308,19 @@ cat > /etc/logrotate.d/proxdns <<'EOF'
     notifempty
 }
 EOF
-msg_ok "/etc/logrotate.d/proxdns"
+msg_ok "/etc/logrotate.d/proxdnx"
 
 # Services =================================================
 msg_info "Enabling and starting services..."
 systemctl daemon-reload
-systemctl enable --now proxdns-mdns.service >/dev/null 2>&1 || true
-systemctl enable proxdns.service >/dev/null 2>&1
-systemctl restart proxdns.service
+systemctl enable --now proxdnx-mdns.service >/dev/null 2>&1 || true
+systemctl enable proxdnx.service >/dev/null 2>&1
+systemctl restart proxdnx.service
 sleep 2
-if systemctl is-active --quiet proxdns; then
-    msg_ok "proxdns is running"
+if systemctl is-active --quiet proxdnx; then
+    msg_ok "proxdnx is running"
 else
-    msg_error "proxdns failed to start — check: journalctl -u proxdns -n 30"
+    msg_error "proxdnx failed to start — check: journalctl -u proxdnx -n 30"
     exit 1
 fi
 
@@ -331,9 +331,9 @@ echo -e "${CUS}🌐  ProxDnx activated${CL}: every published app is reachable at
 echo
 echo -e "${TAB}${GN}✓ ${CL}binary : ${BL}${BIN}${CL}"
 echo -e "${TAB}${GN}✓ ${CL}config : ${BL}${CONF}${CL}"
-echo -e "${TAB}${GN}✓ ${CL}logs   : ${BL}${LOG_DIR}/proxdns.log${CL} ${YW}(journalctl -u proxdns)${CL}"
+echo -e "${TAB}${GN}✓ ${CL}logs   : ${BL}${LOG_DIR}/proxdnx.log${CL} ${YW}(journalctl -u proxdnx)${CL}"
 echo -e "${TAB}${GN}✓ ${CL}api    : ${BL}http://${SERVER_IP:-127.0.0.1}:9973/api/domains${CL}"
 echo
-type_text "To review or tweak what gets published, edit the config and restart proxdns."
+type_text "To review or tweak what gets published, edit the config and restart proxdnx."
 echo
 exit 0

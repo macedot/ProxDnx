@@ -10,17 +10,17 @@
 # Last Updated : 10/11/2026
 # ==========================================================
 # Description:
-# Removes ProxDns and everything it manages:
-#   • proxdns.service + proxdns-mdns.service
-#   • /usr/local/bin/proxdns + proxdns-mdns-publish
-#   • proxdns-marked files in /etc/avahi/services
-#   • /etc/avahi/proxdns-aliases.conf
-#   • /etc/logrotate.d/proxdns
+# Removes ProxDnx and everything it manages:
+#   • proxdnx.service + proxdnx-mdns.service
+#   • /usr/local/bin/proxdnx + proxdnx-mdns-publish
+#   • proxdnx-marked files in /etc/avahi/services
+#   • /etc/avahi/proxdnx-aliases.conf
+#   • /etc/logrotate.d/proxdnx
 #
 # Kept on purpose (manual cleanup if wanted):
 #   • caddy + avahi-daemon (independent services)
-#   • /etc/caddy/Caddyfile (*.pre-proxdns-* backups exist)
-#   • ~/.config/proxdnx/config.yaml + /var/log/proxdns/
+#   • /etc/caddy/Caddyfile (*.pre-proxdnx-* backups exist)
+#   • ~/.config/proxdnx/config.yaml + /var/log/proxdnx/
 #
 # Usage:
 #   uninstall.sh [-y]
@@ -69,22 +69,22 @@ done
 echo -e "${CUS}${BOLD}ProxDnx uninstaller${CL}"
 echo
 
-if ! confirm "Remove ProxDns from this host?"; then
+if ! confirm "Remove ProxDnx from this host?"; then
     msg_error "Uninstall cancelled."
     exit 1
 fi
 
 msg_info "Stopping services..."
-systemctl disable --now proxdns.service 2>/dev/null || true
-systemctl disable --now proxdns-mdns.service 2>/dev/null || true
+systemctl disable --now proxdnx.service 2>/dev/null || true
+systemctl disable --now proxdnx-mdns.service 2>/dev/null || true
 msg_ok "services stopped"
 
-msg_info "Removing proxdns-managed avahi service files..."
+msg_info "Removing proxdnx-managed avahi service files..."
 n=0
 if [ -d /etc/avahi/services ]; then
     for f in /etc/avahi/services/*.service; do
         [ -f "$f" ] || continue
-        if grep -q "managed by proxdns" "$f" 2>/dev/null; then
+        if grep -qiE "managed by proxdn(s|x)" "$f" 2>/dev/null; then
             rm -f "$f"
             n=$((n+1))
         fi
@@ -95,11 +95,11 @@ if [ "$n" -gt 0 ]; then
 fi
 msg_ok "removed $n files"
 
-msg_info "Removing proxdns files..."
-rm -f /etc/avahi/proxdns-aliases.conf
-rm -f /usr/local/bin/proxdns /usr/local/bin/proxdns-mdns-publish
-rm -f /etc/systemd/system/proxdns.service /etc/systemd/system/proxdns-mdns.service
-rm -f /etc/logrotate.d/proxdns
+msg_info "Removing proxdnx files..."
+rm -f /etc/avahi/proxdnx-aliases.conf
+rm -f /usr/local/bin/proxdnx /usr/local/bin/proxdnx-mdns-publish
+rm -f /etc/systemd/system/proxdnx.service /etc/systemd/system/proxdnx-mdns.service
+rm -f /etc/logrotate.d/proxdnx
 systemctl daemon-reload
 msg_ok "files removed"
 
@@ -107,7 +107,7 @@ echo
 echo -e "${CUS}🗑  ProxDnx uninstalled.${CL}"
 echo -e "${TAB}${YW}Kept on purpose (clean up manually if wanted):${CL}"
 echo -e "${TAB}  • caddy + avahi-daemon are still installed/running"
-echo -e "${TAB}  • ${BL}/etc/caddy/Caddyfile${CL} ${YW}(*.pre-proxdns-* backups exist)${CL}"
-echo -e "${TAB}  • ${BL}~/.config/proxdnx/${CL} ${YW}(config)${CL} and ${BL}/var/log/proxdns/${CL} ${YW}(logs)${CL}"
+echo -e "${TAB}  • ${BL}/etc/caddy/Caddyfile${CL} ${YW}(*.pre-proxdnx-* backups exist)${CL}"
+echo -e "${TAB}  • ${BL}~/.config/proxdnx/${CL} ${YW}(config)${CL} and ${BL}/var/log/proxdnx/${CL} ${YW}(logs)${CL}"
 echo
 exit 0
