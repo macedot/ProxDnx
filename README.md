@@ -9,7 +9,7 @@ and automatic reverse proxying, zero manual DNS.
 <br />
 
 <a href="https://github.com/macedot/ProxDnx/releases/latest"><img src="https://img.shields.io/github/v/release/macedot/ProxDnx?display_name=tag&label=latest&color=2A3A5D&style=flat-square" alt="Latest release" /></a>
-<a href="https://github.com/macedot/ProxDnx/blob/main/LICENSE"><img src="https://img.shields.io/github/license/macedot/ProxDnx?color=2A3A5D&style=flat-square" alt="License" /></a>
+<a href="https://github.com/macedot/ProxDnx/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-2A3A5D?style=flat-square" alt="License" /></a>
 <a href="https://github.com/macedot/ProxDnx/releases"><img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-E64804?style=flat-square" alt="Architectures" /></a>
 <a href="https://github.com/macedot/ProxDnx/issues"><img src="https://img.shields.io/github/issues/macedot/ProxDnx?color=2A3A5D&style=flat-square" alt="Open issues" /></a>
 
@@ -157,4 +157,4 @@ Kept on purpose: `caddy`, `avahi-daemon`, the generated
 
 ## 📜 License
 
-[MIT](LICENSE) — free to use, modify and share.
+[AGPL-3.0](LICENSE) — free to use, modify and share; network services built on it must share their source.

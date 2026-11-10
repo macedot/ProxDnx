@@ -5,7 +5,7 @@
 # ==========================================================
 # Author       : macedot
 # Repository   : https://github.com/macedot/ProxDnx
-# License      : MIT
+# License      : AGPL-3.0
 # Version      : 1.0
 # Last Updated : 10/11/2026
 # ==========================================================
