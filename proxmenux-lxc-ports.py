@@ -203,12 +203,14 @@ def write_caddy(records):
             bak = "%s.pre-proxdns-%s" % (CADDYFILE, time.strftime("%Y%m%d-%H%M%S"))
             shutil.copy2(CADDYFILE, bak)
             print("caddy: existing unmanaged Caddyfile backed up -> %s" % bak, file=sys.stderr)
-    out = [CADDY_MARKER, "# generated %s from %d records" % (ts, len(sites)), "", "{", "    auto_https off", "}"]
+    # internal CA for TLS: no public CA can issue for .local; trust caddy's root
+    # on clients to get valid https. Site labels keep https:// (port 443, with
+    # automatic http:80 -> https redirect)
+    out = [CADDY_MARKER, "# generated %s from %d records" % (ts, len(sites)), "",
+           "{", "    local_certs", "}"]
     for s in sorted(sites):
         r = sites[s]
-        # explicit http:// scheme -> caddy binds :80; bare labels default to :443
-        # even with auto_https off
-        out += ["", "http://%s.local {" % s, "    reverse_proxy %s:%d" % (r["ip"], r["port"]), "}"]
+        out += ["", "https://%s.local {" % s, "    reverse_proxy %s:%d" % (r["ip"], r["port"]), "}"]
     tmp = CADDYFILE + ".tmp-proxdns"
     with open(tmp, "w") as f:
         f.write("\n".join(out) + "\n")
@@ -370,7 +372,8 @@ def main():
     ap.add_argument("--network", default=None, help="explicit CIDR override, e.g. 10.4.2.0/24")
     ap.add_argument("--output", default=None, help="write [{name,service,ip,port}] JSON to FILE")
     ap.add_argument("--caddy", action="store_true",
-                    help="generate /etc/caddy/Caddyfile (<slug>.local reverse_proxy) and reload caddy")
+                    help="generate /etc/caddy/Caddyfile (https://<slug>.local via Caddy's internal "
+                         "CA) and reload caddy")
     ap.add_argument("--avahi", action="store_true",
                     help="generate /etc/avahi/services/<slug>.service per app and reload avahi-daemon")
     ap.add_argument("--scan", action="store_true", help="force fresh discovery scans (POST)")
