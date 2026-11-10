@@ -17,9 +17,9 @@ Auth is optional: if the monitor has auth disabled, plain requests work.
   --url URL                   monitor base URL (default http://127.0.0.1:8008)
   --bridge DEV                host bridge whose subnet guests are matched against (default vmbr0)
   --network CIDR              explicit subnet override (e.g. 10.4.2.0/24)
-  --names guest|app           record name: LXC hostname (default) or ProxMenux Apps service name
-  --output FILE               write [{"name","ip","port"}, ...] JSON (guests without a
-                              matched IP or without ports are omitted)
+  --output FILE               write [{"name","service","ip","port"}, ...] JSON — name is the LXC
+                              hostname, service is the ProxMenux Apps service name (falls back to
+                              the hostname); guests without a matched IP or ports are omitted
   --scan                      force fresh docker/native discovery scans (slower)
   --all                       include non-running guests
   --only 100,109              restrict to these VMIDs
@@ -150,10 +150,7 @@ def main():
     ap.add_argument("--totp", default=os.environ.get("PROXMENUX_TOTP"))
     ap.add_argument("--bridge", default="vmbr0", help="host bridge to match subnets against (default vmbr0)")
     ap.add_argument("--network", default=None, help="explicit CIDR override, e.g. 10.4.2.0/24")
-    ap.add_argument("--names", choices=("guest", "app"), default="guest",
-                    help="record name source: LXC hostname (default) or the service name "
-                         "from the ProxMenux Apps list (app_watch/docker container)")
-    ap.add_argument("--output", default=None, help="write simple [{name,ip,port}] JSON to FILE")
+    ap.add_argument("--output", default=None, help="write [{name,service,ip,port}] JSON to FILE")
     ap.add_argument("--scan", action="store_true", help="force fresh discovery scans (POST)")
     ap.add_argument("--all", action="store_true", help="include non-running guests")
     ap.add_argument("--only", default="", help="comma-separated VMID filter")
@@ -205,8 +202,12 @@ def main():
         if ip:
             for p in all_ports:
                 if p.get("port"):
-                    name = (p.get("name") or g.get("name")) if args.names == "app" else g.get("name")
-                    records.append({"name": name, "ip": ip, "port": p["port"]})
+                    records.append({
+                        "name": g.get("name"),
+                        "service": p.get("name") or g.get("name"),
+                        "ip": ip,
+                        "port": p["port"],
+                    })
     rows.sort(key=lambda r: r["vmid"] or 0)
     records.sort(key=lambda r: (r["name"], r["port"]))
 

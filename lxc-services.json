@@ -1,97 +1,116 @@
 [
   {
-    "name": "AdGuard Home",
+    "name": "adguard",
+    "service": "AdGuard Home",
     "ip": "10.4.2.2",
     "port": 3000
   },
   {
-    "name": "Bazarr",
+    "name": "bazarr",
+    "service": "Bazarr",
     "ip": "10.4.2.178",
     "port": 6767
   },
   {
-    "name": "Cloudflared",
+    "name": "cloudflared",
+    "service": "Cloudflared",
     "ip": "10.4.2.116",
     "port": 14333
   },
   {
-    "name": "Gitea",
-    "ip": "10.4.2.158",
-    "port": 3000
-  },
-  {
-    "name": "Immich",
-    "ip": "10.4.2.130",
-    "port": 2283
-  },
-  {
-    "name": "Jellyfin",
-    "ip": "10.4.2.12",
-    "port": 8096
-  },
-  {
-    "name": "Lidarr",
-    "ip": "10.4.2.180",
-    "port": 8686
-  },
-  {
-    "name": "Nginx Proxy Manager",
-    "ip": "10.4.2.42",
-    "port": 81
-  },
-  {
-    "name": "Plex",
-    "ip": "10.4.2.113",
-    "port": 32400
-  },
-  {
-    "name": "Prowlarr",
-    "ip": "10.4.2.103",
-    "port": 9696
-  },
-  {
-    "name": "Qbittorrent",
-    "ip": "10.4.2.188",
-    "port": 8080
-  },
-  {
-    "name": "Radarr",
-    "ip": "10.4.2.140",
-    "port": 7878
-  },
-  {
-    "name": "Seerr",
-    "ip": "10.4.2.189",
-    "port": 5055
-  },
-  {
-    "name": "Sonarr",
-    "ip": "10.4.2.150",
-    "port": 8989
-  },
-  {
-    "name": "Tailscale",
-    "ip": "10.4.2.144",
-    "port": 5252
-  },
-  {
-    "name": "Vaultwarden",
-    "ip": "10.4.2.132",
-    "port": 443
-  },
-  {
     "name": "ddns-go",
+    "service": "ddns-go",
     "ip": "10.4.2.117",
     "port": 9876
   },
   {
-    "name": "dockhand",
+    "name": "docker",
+    "service": "dockhand",
     "ip": "10.4.2.193",
     "port": 3000
   },
   {
-    "name": "reclip-dashboard-1",
+    "name": "docker",
+    "service": "reclip-dashboard-1",
     "ip": "10.4.2.193",
     "port": 8888
+  },
+  {
+    "name": "gitea",
+    "service": "Gitea",
+    "ip": "10.4.2.158",
+    "port": 3000
+  },
+  {
+    "name": "immich-server",
+    "service": "Immich",
+    "ip": "10.4.2.130",
+    "port": 2283
+  },
+  {
+    "name": "jellyfin",
+    "service": "Jellyfin",
+    "ip": "10.4.2.12",
+    "port": 8096
+  },
+  {
+    "name": "lidarr",
+    "service": "Lidarr",
+    "ip": "10.4.2.180",
+    "port": 8686
+  },
+  {
+    "name": "npmplus",
+    "service": "Nginx Proxy Manager",
+    "ip": "10.4.2.42",
+    "port": 81
+  },
+  {
+    "name": "plex",
+    "service": "Plex",
+    "ip": "10.4.2.113",
+    "port": 32400
+  },
+  {
+    "name": "prowlarr",
+    "service": "Prowlarr",
+    "ip": "10.4.2.103",
+    "port": 9696
+  },
+  {
+    "name": "qbittorrent",
+    "service": "Qbittorrent",
+    "ip": "10.4.2.188",
+    "port": 8080
+  },
+  {
+    "name": "radarr",
+    "service": "Radarr",
+    "ip": "10.4.2.140",
+    "port": 7878
+  },
+  {
+    "name": "seerr",
+    "service": "Seerr",
+    "ip": "10.4.2.189",
+    "port": 5055
+  },
+  {
+    "name": "sonarr",
+    "service": "Sonarr",
+    "ip": "10.4.2.150",
+    "port": 8989
+  },
+  {
+    "name": "tailscale",
+    "service": "Tailscale",
+    "ip": "10.4.2.144",
+    "port": 5252
+  },
+  {
+    "name": "vaultwarden",
+    "service": "Vaultwarden",
+    "ip": "10.4.2.132",
+    "port": 443
   }
 ]
