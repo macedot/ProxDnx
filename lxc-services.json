@@ -1,18 +1,83 @@
 [
   {
-    "name": "adguard",
+    "name": "AdGuard Home",
     "ip": "10.4.2.2",
     "port": 3000
   },
   {
-    "name": "bazarr",
+    "name": "Bazarr",
     "ip": "10.4.2.178",
     "port": 6767
   },
   {
-    "name": "cloudflared",
+    "name": "Cloudflared",
     "ip": "10.4.2.116",
     "port": 14333
+  },
+  {
+    "name": "Gitea",
+    "ip": "10.4.2.158",
+    "port": 3000
+  },
+  {
+    "name": "Immich",
+    "ip": "10.4.2.130",
+    "port": 2283
+  },
+  {
+    "name": "Jellyfin",
+    "ip": "10.4.2.12",
+    "port": 8096
+  },
+  {
+    "name": "Lidarr",
+    "ip": "10.4.2.180",
+    "port": 8686
+  },
+  {
+    "name": "Nginx Proxy Manager",
+    "ip": "10.4.2.42",
+    "port": 81
+  },
+  {
+    "name": "Plex",
+    "ip": "10.4.2.113",
+    "port": 32400
+  },
+  {
+    "name": "Prowlarr",
+    "ip": "10.4.2.103",
+    "port": 9696
+  },
+  {
+    "name": "Qbittorrent",
+    "ip": "10.4.2.188",
+    "port": 8080
+  },
+  {
+    "name": "Radarr",
+    "ip": "10.4.2.140",
+    "port": 7878
+  },
+  {
+    "name": "Seerr",
+    "ip": "10.4.2.189",
+    "port": 5055
+  },
+  {
+    "name": "Sonarr",
+    "ip": "10.4.2.150",
+    "port": 8989
+  },
+  {
+    "name": "Tailscale",
+    "ip": "10.4.2.144",
+    "port": 5252
+  },
+  {
+    "name": "Vaultwarden",
+    "ip": "10.4.2.132",
+    "port": 443
   },
   {
     "name": "ddns-go",
@@ -20,78 +85,13 @@
     "port": 9876
   },
   {
-    "name": "docker",
+    "name": "dockhand",
     "ip": "10.4.2.193",
     "port": 3000
   },
   {
-    "name": "docker",
+    "name": "reclip-dashboard-1",
     "ip": "10.4.2.193",
     "port": 8888
-  },
-  {
-    "name": "gitea",
-    "ip": "10.4.2.158",
-    "port": 3000
-  },
-  {
-    "name": "immich-server",
-    "ip": "10.4.2.130",
-    "port": 2283
-  },
-  {
-    "name": "jellyfin",
-    "ip": "10.4.2.12",
-    "port": 8096
-  },
-  {
-    "name": "lidarr",
-    "ip": "10.4.2.180",
-    "port": 8686
-  },
-  {
-    "name": "npmplus",
-    "ip": "10.4.2.42",
-    "port": 81
-  },
-  {
-    "name": "plex",
-    "ip": "10.4.2.113",
-    "port": 32400
-  },
-  {
-    "name": "prowlarr",
-    "ip": "10.4.2.103",
-    "port": 9696
-  },
-  {
-    "name": "qbittorrent",
-    "ip": "10.4.2.188",
-    "port": 8080
-  },
-  {
-    "name": "radarr",
-    "ip": "10.4.2.140",
-    "port": 7878
-  },
-  {
-    "name": "seerr",
-    "ip": "10.4.2.189",
-    "port": 5055
-  },
-  {
-    "name": "sonarr",
-    "ip": "10.4.2.150",
-    "port": 8989
-  },
-  {
-    "name": "tailscale",
-    "ip": "10.4.2.144",
-    "port": 5252
-  },
-  {
-    "name": "vaultwarden",
-    "ip": "10.4.2.132",
-    "port": 443
   }
 ]
