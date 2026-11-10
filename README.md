@@ -107,6 +107,7 @@ curl http://<your-proxmox-ip>:9973/api/domains
 | `network` | *(empty)* | Explicit CIDR override (e.g. `10.4.2.0/24`) |
 | `interval` | `60s` | Cycle interval |
 | `caddy` / `avahi` | `true` (installer) | Enable each writer |
+| `http` | `true` | Serve plain `http://name.local` on :80 alongside HTTPS (no redirect) |
 | `api_addr` | `127.0.0.1:9973` | API listen address |
 | `log_file` | `/var/log/proxdns/proxdns.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |

@@ -10,7 +10,7 @@
 # Last Updated : 10/11/2026
 # ==========================================================
 # Description:
-# This script installs and configures ProxDns, a daemon that
+# This script installs and configures ProxDnx, a daemon that
 # publishes every ProxMenux-monitored LXC app as
 # https://<service>.local via Caddy (reverse proxy + internal
 # TLS) and avahi (mDNS service files + A records).
@@ -140,14 +140,14 @@ done
 [ "$(id -u)" -eq 0 ] || { msg_error "This script must be run as root."; exit 1; }
 
 echo -e "${CUS}${BOLD}"
-echo "    ____                   ____  _   _  ___  ____  "
-echo "   |  _ \ __ _ _ __   ___ |  _ \| \ | |/ _ \/ ___| "
-echo "   | |_) / _\` | '_ \ / _ \| | | |  \| | | | \___ \ "
-echo "   |  __/ (_| | | | |  __/| |_| | |\  | |_| |___) |"
-echo "   |_|   \__,_|_| |_|\___||____/|_| \_|\___/|____/ "
+echo "    ____                ____             "
+echo "   |  _ \ _ __ _____  _|  _ \ _ __ __  __"
+echo "   | |_) | '__/ _ \ \\/ / | | | '_ \\ \\/ /"
+echo "   |  __/| | | (_) >  <| |_| | | | |>  < "
+echo "   |_|   |_|  \___/_/\_\____/|_| |_/_/\_\""
 echo -e "${CL}"
 
-echo -e "${TAB}${BOLD}ProxDns — ProxMenux-driven *.local publisher${CL}"
+echo -e "${TAB}${BOLD}ProxDnx — ProxMenux-driven *.local publisher${CL}"
 echo -e "${TAB}repo: ${BL}https://github.com/${REPO}${CL}"
 echo
 
@@ -204,7 +204,7 @@ fi
 
 # Confirmation =============================================
 echo
-if ! confirm "Install/upgrade ProxDns on this host?"; then
+if ! confirm "Install/upgrade ProxDnx on this host?"; then
     msg_error "Installation cancelled."
     exit 1
 fi
@@ -233,6 +233,7 @@ network: ""
 interval: 60s
 caddy: true
 avahi: true
+http: true
 scan: false
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdns/proxdns.log
@@ -279,7 +280,7 @@ msg_ok "publisher installed"
 msg_info "Installing proxdns.service (Requires: caddy + avahi-daemon)..."
 cat > "$SERVICE_FILE" <<'EOF'
 [Unit]
-Description=ProxDNS - ProxMenux driven caddy/avahi *.local publisher
+Description=ProxDnx - ProxMenux driven caddy/avahi *.local publisher
 Wants=network-online.target
 After=network-online.target caddy.service avahi-daemon.service proxdns-mdns.service
 Requires=caddy.service avahi-daemon.service
@@ -326,7 +327,7 @@ fi
 # Summary ==================================================
 SERVER_IP=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1{split($4,a,"/");print a[1]}')
 echo
-echo -e "${CUS}🌐  ProxDns activated${CL}: every published app is reachable at ${BL}https://<service>.local${CL}"
+echo -e "${CUS}🌐  ProxDnx activated${CL}: every published app is reachable at ${BL}https://<service>.local${CL}"
 echo
 echo -e "${TAB}${GN}✓ ${CL}binary : ${BL}${BIN}${CL}"
 echo -e "${TAB}${GN}✓ ${CL}config : ${BL}${CONF}${CL}"

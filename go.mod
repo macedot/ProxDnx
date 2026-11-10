@@ -1,3 +1,3 @@
-module github.com/macedot/proxdns
+module github.com/macedot/ProxDnx
 
 go 1.24

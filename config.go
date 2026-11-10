@@ -97,16 +97,19 @@ func loadConfig(path string, c *Config) (bool, error) {
 				return true, fmt.Errorf("%s: bad duration %q: %v", k, v, err)
 			}
 			c.Interval = d
-		case "caddy", "avahi", "scan":
+		case "caddy", "avahi", "http", "scan":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return true, fmt.Errorf("%s: bad bool %q: %v", k, v, err)
 			}
-			if k == "caddy" {
+			switch k {
+			case "caddy":
 				c.Caddy = b
-			} else if k == "avahi" {
+			case "avahi":
 				c.Avahi = b
-			} else {
+			case "http":
+				c.HTTP = b
+			default:
 				c.Scan = b
 			}
 		case "api_addr":
@@ -138,6 +141,7 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "interval: %s\n", c.Interval.String())
 	fmt.Fprintf(&b, "caddy: %s\n", strconv.FormatBool(c.Caddy))
 	fmt.Fprintf(&b, "avahi: %s\n", strconv.FormatBool(c.Avahi))
+	fmt.Fprintf(&b, "http: %s\n", strconv.FormatBool(c.HTTP))
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))

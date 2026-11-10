@@ -34,7 +34,7 @@ const portalHTML = `<!doctype html>
 </head>
 <body>
 <header>
-  <h1>🧭 Prox<span>Dns</span></h1>
+  <h1>🧭 Prox<span>Dnx</span></h1>
   <p><span class="n" id="n">…</span> published services · updated <span id="updated">…</span></p>
 </header>
 <main id="grid"><div class="empty">loading…</div></main>

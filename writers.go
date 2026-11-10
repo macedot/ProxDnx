@@ -36,7 +36,7 @@ wait
 `
 
 const publisherUnitSrc = `[Unit]
-Description=ProxDNS mDNS alias publisher (avahi-publish per *.local name)
+Description=ProxDnx mDNS alias publisher (avahi-publish per *.local name)
 After=avahi-daemon.service
 Requires=avahi-daemon.service
 
@@ -118,7 +118,7 @@ func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
 // label is https:// so caddy binds 443 and auto-redirects 80.
 // proxdnx.local is added as the portal: it proxies to this daemon's API, which
 // serves the apps dashboard.
-func applyCaddy(logger *log.Logger, recs []Record, apiAddr string) error {
+func applyCaddy(logger *log.Logger, recs []Record, apiAddr string, httpEnabled bool) error {
 	sites := dedupeSites(recs)
 	if len(sites) == 0 {
 		logger.Printf("caddy: no records — Caddyfile left untouched")
@@ -144,9 +144,16 @@ func applyCaddy(logger *log.Logger, recs []Record, apiAddr string) error {
 	for _, s := range slugs {
 		r := sites[s]
 		fmt.Fprintf(&b, "\nhttps://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
+		if httpEnabled {
+			// plain http twin: serves content on :80 instead of redirecting
+			fmt.Fprintf(&b, "\nhttp://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
+		}
 	}
 	// portal: apps dashboard served by this daemon's API server
 	fmt.Fprintf(&b, "\nhttps://proxdnx.local {\n    reverse_proxy %s\n}\n", apiAddr)
+	if httpEnabled {
+		fmt.Fprintf(&b, "\nhttp://proxdnx.local {\n    reverse_proxy %s\n}\n", apiAddr)
+	}
 	content := b.String()
 	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
 		logger.Printf("caddy: unchanged (%d sites)", len(sites))

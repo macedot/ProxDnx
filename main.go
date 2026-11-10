@@ -54,6 +54,7 @@ type Config struct {
 	Interval time.Duration
 	Caddy    bool
 	Avahi    bool
+	HTTP     bool // serve plain http:// alongside https:// (no redirect)
 	Scan     bool
 	APIAddr  string
 	LogFile  string
@@ -67,6 +68,7 @@ func defaultConfig() Config {
 		BaseURL:  defaultBaseURL,
 		Bridge:   "vmbr0",
 		Interval: defaultInterval,
+		HTTP:     true,
 		APIAddr:  defaultAPIAddr,
 		LogFile:  defaultLogFile,
 	}
@@ -133,7 +135,7 @@ func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
 	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fLog string
-	var fCaddy, fAvahi, fScan, fOnce bool
+	var fCaddy, fAvahi, fHTTP, fScan, fOnce bool
 	fs := flag.NewFlagSet("proxdns", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
 	fs.StringVar(&fURL, "url", "", "ProxMenux monitor base URL (env PROXMENUX_URL)")
@@ -146,6 +148,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.StringVar(&fInterval, "interval", "", "update interval (default 60s)")
 	fs.BoolVar(&fCaddy, "caddy", false, "render and reload /etc/caddy/Caddyfile")
 	fs.BoolVar(&fAvahi, "avahi", false, "render avahi service files + publish *.local A records")
+	fs.BoolVar(&fHTTP, "http", false, "serve plain http:// alongside https:// (default: config/http, on)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdns/proxdns.log)")
@@ -193,6 +196,8 @@ func loadEffectiveConfig() (Config, error) {
 			}
 		case "caddy":
 			c.Caddy = fCaddy
+		case "http":
+			c.HTTP = fHTTP
 		case "avahi":
 			c.Avahi = fAvahi
 		case "scan":
@@ -303,7 +308,7 @@ func (a *App) cycle(ctx context.Context) error {
 	// render + apply; a writer failure is logged, not fatal — the daemon and
 	// API keep serving the last known good state.
 	if a.cfg.Caddy {
-		if err := applyCaddy(a.log, recs, a.cfg.APIAddr); err != nil {
+		if err := applyCaddy(a.log, recs, a.cfg.APIAddr, a.cfg.HTTP); err != nil {
 			a.log.Printf("caddy: apply failed: %v", err)
 		}
 	}
@@ -365,8 +370,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdns starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi)
+	logger.Printf("proxdns starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP)
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

@@ -104,7 +104,7 @@ systemctl daemon-reload
 msg_ok "files removed"
 
 echo
-echo -e "${CUS}🗑  ProxDns uninstalled.${CL}"
+echo -e "${CUS}🗑  ProxDnx uninstalled.${CL}"
 echo -e "${TAB}${YW}Kept on purpose (clean up manually if wanted):${CL}"
 echo -e "${TAB}  • caddy + avahi-daemon are still installed/running"
 echo -e "${TAB}  • ${BL}/etc/caddy/Caddyfile${CL} ${YW}(*.pre-proxdns-* backups exist)${CL}"
