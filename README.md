@@ -1,73 +1,160 @@
+<div align="center">
+
 # ProxDnx
 
-ProxMenux-driven `*.local` publisher for a Proxmox host: derives
-`name/ip/port` records for every running LXC from the [ProxMenux](https://github.com/MacRostie/proxmenux)
-monitor API, then renders and reloads **Caddy** (reverse proxy) and **avahi**
-(mDNS service files + `*.local` A records) so every app is reachable as
-`https://<service>.local` on the LAN.
+**ProxMenux-driven `*.local` publisher for Proxmox VE** — every app in your
+homelab becomes reachable as `https://<service>.local`, with mDNS discovery
+and automatic reverse proxying, zero manual DNS.
 
-Go stdlib only — zero external dependencies.
+<br />
 
-## What a cycle does (default every 60s)
+<a href="https://github.com/macedot/ProxDnx/releases/latest"><img src="https://img.shields.io/github/v/release/macedot/ProxDnx?display_name=tag&label=latest&color=2A3A5D&style=flat-square" alt="Latest release" /></a>
+<a href="https://github.com/macedot/ProxDnx/blob/main/LICENSE"><img src="https://img.shields.io/github/license/macedot/ProxDnx?color=2A3A5D&style=flat-square" alt="License" /></a>
+<a href="https://github.com/macedot/ProxDnx/releases"><img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-E64804?style=flat-square" alt="Architectures" /></a>
+<a href="https://github.com/macedot/ProxDnx/issues"><img src="https://img.shields.io/github/issues/macedot/ProxDnx?color=2A3A5D&style=flat-square" alt="Open issues" /></a>
 
-1. Query ProxMenux `/api/vms` + per-guest app discovery.
-2. Pick each guest's IPv4 on the host bridge subnet (like `adguard_proxmox_sync.py`).
-3. Diff against the previous run and log **kept / added / removed / changed**.
-4. When something changed:
-   - render `/etc/caddy/Caddyfile` (`https://<slug>.local` → `reverse_proxy ip:port`,
-     TLS via Caddy's internal CA — no public CA can issue for `.local`),
-     `caddy validate`, then `systemctl reload caddy`;
-   - write `/etc/avahi/services/<slug>.service` and the alias list
-     `/etc/avahi/proxdns-aliases.conf`, reload avahi-daemon, restart
-     `proxdns-mdns.service` (one `avahi-publish -a -R slug.local <host-ip>` per app,
-     so `<slug>.local` resolves to the host and caddy routes by Host header).
+</div>
 
-## API
+<br />
 
+<p align="center">
+  <strong>ProxDnx</strong> watches your <a href="https://github.com/MacRimi/ProxMenux"><strong>ProxMenux</strong></a>
+  Monitor, learns every running LXC app (name, IP, port), and publishes it as
+  a valid <strong>https://&lt;service&gt;.local</strong> domain through Caddy and avahi —
+  converging automatically every 60 seconds. Go stdlib only, zero dependencies.
+</p>
+
+---
+
+## 📌 Installation
+
+Run the following command in your Proxmox server terminal:
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh)"
 ```
-curl http://127.0.0.1:9973/api/domains   # every published domain: {domain, service, name, ip, port}
-curl http://127.0.0.1:9973/api/status    # last cycle stats + settings
-curl http://127.0.0.1:9973/healthz
-```
 
-## Install / uninstall (raw-URL friendly)
+or with curl:
 
-```
+```bash
 curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | bash
+```
+
+Install a specific release instead of the latest:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | bash -s -- v1.0.0
+```
+
+> ⚠️ Be careful when copying scripts from the internet. Always remember to check the source!
+>
+> 📄 You can [review the install script](https://github.com/macedot/ProxDnx/blob/main/install.sh) before execution.
+>
+> 🛡️ Requirements: [ProxMenux](https://github.com/MacRimi/ProxMenux) Monitor running, plus the `caddy` and `avahi-daemon` packages.
+
+---
+
+## 📌 How to Use
+
+Once installed, ProxDns runs as a systemd daemon and needs no interaction.
+Every 60 seconds it:
+
+1. Asks ProxMenux for every running LXC and its discovered apps/ports
+2. Picks each guest's IP on the host bridge subnet (e.g. `vmbr0`)
+3. Diffs against the previous run and logs **kept / added / removed / changed**
+4. Updates what changed — and only what changed:
+   - `/etc/caddy/Caddyfile` → `https://<service>.local` reverse-proxied to the app (TLS from Caddy's internal CA, `caddy validate` before reload)
+   - `/etc/avahi/services/<service>.service` → mDNS advertisement
+   - `proxdns-mdns.service` → publishes `<service>.local` A records via `avahi-publish`
+
+Open any published app from any mDNS-capable device on your LAN:
+
+```
+https://immich.local        https://plex.local        https://adguard-home.local
+```
+
+> 🔐 The first time, import Caddy's local root CA on your clients
+> (`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`)
+> so browsers show a valid padlock — no public CA can issue certificates
+> for `.local`.
+
+---
+
+## 🌐 API
+
+The daemon exports a small HTTP API reporting every domain it published:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/domains` | All published domains: `{"domain","service","name","ip","port"}` |
+| `GET /api/status` | Interval, enabled writers, last cycle stats (kept/added/removed/changed) |
+| `GET /healthz` | Liveness |
+
+```bash
+curl http://<your-proxmox-ip>:9973/api/domains
+```
+
+---
+
+## ⚙️ Configuration
+
+`~/.config/proxdnx/config.yaml` — bootstrapped on first install, never overwritten on upgrade:
+
+| Key | Default | Purpose |
+|---|---|---|
+| `url` | `http://127.0.0.1:8008` | ProxMenux Monitor API |
+| `bridge` | `vmbr0` | Host bridge whose subnet guests are matched against |
+| `network` | *(empty)* | Explicit CIDR override (e.g. `10.4.2.0/24`) |
+| `interval` | `60s` | Cycle interval |
+| `caddy` / `avahi` | `true` (installer) | Enable each writer |
+| `api_addr` | `127.0.0.1:9973` | API listen address |
+| `log_file` | `/var/log/proxdns/proxdns.log` | Log file (also journald) |
+| `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |
+
+**Useful commands:**
+
+```bash
+# Check service status
+systemctl status proxdns
+
+# View logs
+tail -f /var/log/proxdns/proxdns.log
+journalctl -u proxdns -n 50
+
+# Restart after a config change
+systemctl restart proxdns
+```
+
+---
+
+## 🧩 Services
+
+| Service | Purpose |
+|---|---|
+| `proxdns.service` | The daemon — `Requires=` + `After=` caddy and avahi-daemon |
+| `proxdns-mdns.service` | Publishes `<service>.local` A records via `avahi-publish` |
+
+---
+
+## 🔄 Updating
+
+Re-run the install command — it downloads the latest release, upgrades the
+binary and restarts the service. Your config is never overwritten.
+
+---
+
+## 🗑️ Uninstall
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/uninstall.sh | bash
 ```
 
-Other repo: prefix with `PROXDNS_REPO=you/ProxDnx`. Releases contain
-`proxdns-linux-{amd64,arm64}.tar.gz` (built by GitHub Actions on `v*` tags).
+Removes the services, the binary and every proxdns-managed avahi file.
+Kept on purpose: `caddy`, `avahi-daemon`, the generated
+`/etc/caddy/Caddyfile` (with `.pre-proxdns-*` backups), your config and logs.
 
-## Config
+---
 
-`~/.config/proxdnx/config.yaml` (bootstrapped on first run; flags/env override):
+## 📜 License
 
-```yaml
-url: http://127.0.0.1:8008   # ProxMenux monitor
-bridge: vmbr0                # subnet guests are matched against
-interval: 60s
-caddy: true
-avahi: true
-api_addr: 127.0.0.1:9973
-log_file: /var/log/proxdns/proxdns.log
-# optional auth (env PROXMENUX_TOKEN / PROXMENUX_USER / PROXMENUX_PASS also work)
-token: ""
-```
-
-Logs: `/var/log/proxdns/proxdns.log` + journald (`journalctl -u proxdns`).
-
-## Manual run
-
-```
-go build -o proxdns .
-./proxdns --once --caddy --avahi      # single cycle
-./proxdns --interval 30s --network 10.4.2.0/24
-```
-
-## systemd
-
-`proxdns.service` `Requires=` + `After=` `caddy.service` and `avahi-daemon.service`
-(the daemons must be up; the daemon keeps converging every interval, no cron).
+[MIT](LICENSE) — free to use, modify and share.
