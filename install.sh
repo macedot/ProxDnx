@@ -234,6 +234,7 @@ interval: 60s
 caddy: true
 avahi: true
 http: true
+static_redirects: true
 scan: false
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log

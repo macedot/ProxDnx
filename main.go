@@ -31,11 +31,13 @@ import (
 )
 
 const (
-	defaultAPIAddr  = "127.0.0.1:9973"
-	defaultLogFile  = "/var/log/proxdnx/proxdnx.log"
-	defaultBaseURL  = "http://127.0.0.1:8008"
-	defaultInterval = 60 * time.Second
-	managedBy       = "managed by ProxDnx"
+	defaultAPIAddr   = "127.0.0.1:9973"
+	defaultLogFile   = "/var/log/proxdnx/proxdnx.log"
+	defaultBaseURL   = "http://127.0.0.1:8008"
+	defaultInterval  = 60 * time.Second
+	defaultPVEPort   = 8006 // Proxmox VE web UI (pveproxy)
+	defaultMenuxPort = 8008 // ProxMenux Monitor UI; derived from config url when it has a port
+	managedBy        = "managed by ProxDnx"
 	// detection prefix: matches legacy "managed by proxdns" markers too
 	managedByPrefix  = "managed by proxdn"
 	caddyfile        = "/etc/caddy/Caddyfile"
@@ -46,33 +48,35 @@ const (
 )
 
 type Config struct {
-	BaseURL  string
-	Token    string
-	User     string
-	Password string
-	TOTP     string
-	Bridge   string
-	Network  string
-	Interval time.Duration
-	Caddy    bool
-	Avahi    bool
-	HTTP     bool // serve plain http:// alongside https:// (no redirect)
-	Scan     bool
-	APIAddr  string
-	LogFile  string
-	Path     string // resolved config file path
+	BaseURL         string
+	Token           string
+	User            string
+	Password        string
+	TOTP            string
+	Bridge          string
+	Network         string
+	Interval        time.Duration
+	Caddy           bool
+	Avahi           bool
+	HTTP            bool // serve plain http:// alongside https:// (no redirect)
+	StaticRedirects bool // static infra redirects: <host>.local -> Proxmox UI, menux*.local -> ProxMenux
+	Scan            bool
+	APIAddr         string
+	LogFile         string
+	Path            string // resolved config file path
 
 	created bool // config file was bootstrapped this run
 }
 
 func defaultConfig() Config {
 	return Config{
-		BaseURL:  defaultBaseURL,
-		Bridge:   "vmbr0",
-		Interval: defaultInterval,
-		HTTP:     true,
-		APIAddr:  defaultAPIAddr,
-		LogFile:  defaultLogFile,
+		BaseURL:         defaultBaseURL,
+		Bridge:          "vmbr0",
+		Interval:        defaultInterval,
+		HTTP:            true,
+		StaticRedirects: true,
+		APIAddr:         defaultAPIAddr,
+		LogFile:         defaultLogFile,
 	}
 }
 
@@ -137,7 +141,7 @@ func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
 	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fLog string
-	var fCaddy, fAvahi, fHTTP, fScan, fOnce bool
+	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fStatic bool
 	fs := flag.NewFlagSet("proxdnx", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
 	fs.StringVar(&fURL, "url", "", "ProxMenux monitor base URL (env PROXMENUX_URL)")
@@ -151,6 +155,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.BoolVar(&fCaddy, "caddy", false, "render and reload /etc/caddy/Caddyfile")
 	fs.BoolVar(&fAvahi, "avahi", false, "render avahi service files + publish *.local A records")
 	fs.BoolVar(&fHTTP, "http", false, "serve plain http:// alongside https:// (default: config/http, on)")
+	fs.BoolVar(&fStatic, "static", false, "static infra redirects: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (default: config/static_redirects, on)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
@@ -200,6 +205,8 @@ func loadEffectiveConfig() (Config, error) {
 			c.Caddy = fCaddy
 		case "http":
 			c.HTTP = fHTTP
+		case "static":
+			c.StaticRedirects = fStatic
 		case "avahi":
 			c.Avahi = fAvahi
 		case "scan":
@@ -252,11 +259,21 @@ func (a *App) serveAPI() error {
 			"last_cycle":       a.stats,
 		})
 	})
+	mux.HandleFunc("GET /api/static", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		cfg := a.cfg
+		a.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled": cfg.StaticRedirects,
+			"routes":  staticRoutes(hostLabel(), menuxPortFromURL(cfg.BaseURL)),
+		})
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
 	})
-	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/status, /healthz)", a.cfg.APIAddr)
+	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /healthz)", a.cfg.APIAddr)
 	return http.ListenAndServe(a.cfg.APIAddr, mux)
 }
 
@@ -310,12 +327,12 @@ func (a *App) cycle(ctx context.Context) error {
 	// render + apply; a writer failure is logged, not fatal — the daemon and
 	// API keep serving the last known good state.
 	if a.cfg.Caddy {
-		if err := applyCaddy(a.log, recs, a.cfg.APIAddr, a.cfg.HTTP); err != nil {
+		if err := applyCaddy(a.log, recs, a.cfg); err != nil {
 			a.log.Printf("caddy: apply failed: %v", err)
 		}
 	}
 	if a.cfg.Avahi {
-		if err := applyAvahi(a.log, recs, a.cfg.Bridge); err != nil {
+		if err := applyAvahi(a.log, recs, a.cfg); err != nil {
 			a.log.Printf("avahi: apply failed: %v", err)
 		}
 	}
@@ -372,8 +389,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP)
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.StaticRedirects)
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {
