@@ -67,11 +67,11 @@ Every 60 seconds it:
    - `/etc/avahi/services/<service>.service` → mDNS advertisement
    - `proxdnx-mdns.service` → publishes `<service>.local` A records via `avahi-publish`
 
-It also serves a small **static infrastructure layer** (disable with
-`static_redirects: false`):
+It also serves a small **static infrastructure layer** — reverse-proxied like
+any app, so no redirect and no port in the URL (disable with `static: false`):
 
-- `https://<host>.local` → **Proxmox VE web UI** (`:8006`)
-- `https://menux.local`, `https://proxmenux.local`, `https://menux.<host>.local` → **ProxMenux Monitor** (`:8008`)
+- `https://<host>.local` → **Proxmox VE web UI** (proxied to `:8006`)
+- `https://menux.local`, `https://proxmenux.local`, `https://menux.<host>.local` → **ProxMenux Monitor** (proxied to the configured monitor URL)
 - only `https://apps.<host>.local` serves the ProxDnx dashboard itself
 
 Open any published app from any mDNS-capable device on your LAN:
@@ -116,7 +116,7 @@ curl http://<your-proxmox-ip>:9973/api/domains
 | `interval` | `60s` | Cycle interval |
 | `caddy` / `avahi` | `true` (installer) | Enable each writer |
 | `http` | `true` | Serve plain `http://name.local` on :80 alongside HTTPS (no redirect) |
-| `static_redirects` | `true` | Static infra redirects: `<host>.local` → Proxmox UI, `menux*.local` → ProxMenux; listed separately on the portal |
+| `static` | `true` | Static infra entries, proxied like apps (no port URLs): `<host>.local` → Proxmox UI, `menux*.local` → ProxMenux; listed separately on the portal |
 | `api_addr` | `127.0.0.1:9973` | API listen address |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |

@@ -2,10 +2,11 @@ package main
 
 // Portal page served ONLY at https://apps.<host>.local — a clean dashboard of
 // every published service (ProxMenux-style dark card grid), plus a separate
-// "Infrastructure" section for the fixed static redirects (<host>.local ->
-// Proxmox UI, menux*.local -> ProxMenux). That section is rendered from
-// /api/static and hidden when static redirects are disabled in config
-// (static_redirects: false). The page fetches the API live, so data is always
+// "Infrastructure" section for the fixed static entries (<host>.local ->
+// Proxmox UI, menux*.local -> ProxMenux), reverse-proxied like any app. That
+// section is rendered from
+// /api/static and hidden when static entries are disabled in config
+// (static: false). The page fetches the API live, so data is always
 // current with zero file churn.
 
 const portalHTML = `<!doctype html>
@@ -78,8 +79,8 @@ async function loadStatic(){
     g.innerHTML="";
     (s.routes||[]).forEach(r=>{
       const c=document.createElement("div");c.className="card";
-      c.innerHTML='<a class="domain" href="'+esc(r.target)+'/">'+esc(r.label)+'</a>'
-        +'<div class="svc">'+esc(r.desc)+' → <b style="color:var(--text)">'+esc(r.target)+'</b></div>'
+      c.innerHTML='<a class="domain" href="https://'+esc(r.names[0])+'/">'+esc(r.label)+'</a>'
+        +'<div class="svc">'+esc(r.desc)+' → <b style="color:var(--text)">'+esc(r.upstream)+'</b></div>'
         +'<div class="chips">'+(r.names||[]).map(n=>'<span class="chip">🏷 <b>'+esc(n)+'</b></span>').join("")+'</div>';
       g.appendChild(c);
     });

@@ -3,11 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -54,47 +52,39 @@ WantedBy=multi-user.target
 
 var xmlEsc = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 
-// StaticRoute is a fixed infrastructure entry: local names caddy answers with
-// a 308 redirect to a well-known LAN UI (never proxied). Rendered into the
-// Caddyfile, published via mDNS, listed on the portal and disable-able via
-// config (static_redirects).
+// StaticRoute is a fixed infrastructure entry handled exactly like a normal
+// app: caddy reverse-proxies the local names to a well-known LAN UI — no
+// redirect, no port in the browser URL. Rendered into the Caddyfile,
+// published via mDNS, listed on the portal and disable-able via config
+// (static).
 type StaticRoute struct {
-	Label  string   `json:"label"`
-	Desc   string   `json:"desc"`
-	Names  []string `json:"names"`
-	Target string   `json:"target"`
+	Label    string   `json:"label"`
+	Desc     string   `json:"desc"`
+	Names    []string `json:"names"`
+	Upstream string   `json:"upstream"`
+	Secure   bool     `json:"-"` // https upstream with a self-signed cert (skip verify)
 }
 
-// menuxPortFromURL extracts the monitor UI port from the configured API URL so
-// a relocated ProxMenux monitor is followed automatically.
-func menuxPortFromURL(raw string) int {
-	if u, err := url.Parse(raw); err == nil {
-		if p := u.Port(); p != "" {
-			if n, err := strconv.Atoi(p); err == nil && n > 0 && n < 65536 {
-				return n
-			}
-		}
-	}
-	return defaultMenuxPort
-}
-
-// staticRoutes derives the fixed infrastructure redirects from the hostname.
-// The bare <host>.local name is answered but never published by us: the OS
-// avahi daemon already announces it, and re-announcing a host's own name with
-// a different A record triggers an avahi conflict rename.
-func staticRoutes(host string, menuxPort int) []StaticRoute {
+// staticRoutes derives the fixed infrastructure entries from the hostname.
+// The ProxMenux upstream is the configured monitor URL itself, so a relocated
+// monitor is followed automatically. The bare <host>.local name is answered
+// but never published by us: the OS avahi daemon already announces it, and
+// re-announcing a host's own name with a different A record triggers an avahi
+// conflict rename.
+func staticRoutes(host, menuxUpstream string) []StaticRoute {
 	return []StaticRoute{
 		{
-			Label:  "Proxmox VE",
-			Desc:   "Proxmox web UI",
-			Names:  []string{host + ".local"},
-			Target: fmt.Sprintf("https://%s.local:%d", host, defaultPVEPort),
+			Label:    "Proxmox VE",
+			Desc:     "Proxmox web UI",
+			Names:    []string{host + ".local"},
+			Upstream: fmt.Sprintf("https://127.0.0.1:%d", defaultPVEPort),
+			Secure:   true,
 		},
 		{
-			Label:  "ProxMenux",
-			Desc:   "ProxMenux Monitor home",
-			Names:  []string{"menux.local", "proxmenux.local", "menux." + host + ".local"},
-			Target: fmt.Sprintf("http://%s.local:%d", host, menuxPort),
+			Label:    "ProxMenux",
+			Desc:     "ProxMenux Monitor home",
+			Names:    []string{"menux.local", "proxmenux.local", "menux." + host + ".local"},
+			Upstream: menuxUpstream,
 		},
 	}
 }
@@ -186,13 +176,14 @@ func hostLabel() string {
 // applyCaddy renders the Caddyfile and reloads caddy when it changed.
 // TLS uses Caddy's internal CA (no public CA can issue for .local); every site
 // label is https:// so caddy binds 443 and auto-redirects 80.
-// Static redirects (cfg.StaticRedirects) answer <host>.local -> Proxmox UI and
-// menux*.local -> ProxMenux with plain 308s. The portal itself is served ONLY
-// on apps.<host>.local, proxying to this daemon's API.
+// Static entries (cfg.Static) handle <host>.local -> Proxmox UI and
+// menux*.local -> ProxMenux exactly like normal apps: reverse-proxied, no
+// redirect, no port in the URL. The portal itself is served ONLY on
+// apps.<host>.local, proxying to this daemon's API.
 func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 	sites := dedupeSites(recs)
-	if len(sites) == 0 && !cfg.StaticRedirects {
-		logger.Printf("caddy: no records and static redirects disabled — Caddyfile left untouched")
+	if len(sites) == 0 && !cfg.Static {
+		logger.Printf("caddy: no records and static entries disabled — Caddyfile left untouched")
 		return nil
 	}
 	cur, _ := os.ReadFile(caddyfile)
@@ -206,8 +197,8 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 	fmt.Fprintf(&b, "# %s (ProxDnx)\n", managedBy)
 	// no timestamps in rendered output: keeps cycles idempotent (no rewrite churn)
 	fmt.Fprintf(&b, "# %d apps + portal", len(sites))
-	if cfg.StaticRedirects {
-		b.WriteString(" + static redirects")
+	if cfg.Static {
+		b.WriteString(" + static entries")
 	}
 	b.WriteString("\n\n")
 	b.WriteString("{\n    local_certs\n}\n")
@@ -224,27 +215,35 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 			fmt.Fprintf(&b, "\nhttp://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
 		}
 	}
-	// static infrastructure redirects: <host>.local -> Proxmox UI, menux*.local
-	// -> ProxMenux. Plain 308s — these names are never proxied. <host>.local is
+	// static infrastructure entries: <host>.local -> Proxmox UI, menux*.local
+	// -> ProxMenux — reverse-proxied like any app, no redirect. <host>.local is
 	// announced by the OS avahi daemon (the host's own name — never publish it
 	// here: re-announcing it with a different A record triggers an avahi
 	// conflict rename); menux*.local + apps.<host>.local are published by
 	// proxdnx-mdns-publish via the alias list below.
 	h := hostLabel()
-	if cfg.StaticRedirects {
-		menuxPort := menuxPortFromURL(cfg.BaseURL)
-		for _, r := range staticRoutes(h, menuxPort) {
+	if cfg.Static {
+		for _, r := range staticRoutes(h, cfg.BaseURL) {
 			names := make([]string, 0, len(r.Names))
 			for _, n := range r.Names {
 				names = append(names, "https://"+n)
 			}
-			fmt.Fprintf(&b, "\n%s {\n    redir %s{uri} 308\n}\n", strings.Join(names, ", "), r.Target)
+			if r.Secure {
+				// https upstream (self-signed pve cert): skip verify
+				fmt.Fprintf(&b, "\n%s {\n    reverse_proxy %s {\n        transport http {\n            tls_insecure_skip_verify\n        }\n    }\n}\n", strings.Join(names, ", "), r.Upstream)
+			} else {
+				fmt.Fprintf(&b, "\n%s {\n    reverse_proxy %s\n}\n", strings.Join(names, ", "), r.Upstream)
+			}
 			if cfg.HTTP {
 				plain := make([]string, 0, len(r.Names))
 				for _, n := range r.Names {
 					plain = append(plain, "http://"+n)
 				}
-				fmt.Fprintf(&b, "\n%s {\n    redir %s{uri} 308\n}\n", strings.Join(plain, ", "), r.Target)
+				if r.Secure {
+					fmt.Fprintf(&b, "\n%s {\n    reverse_proxy %s {\n        transport http {\n            tls_insecure_skip_verify\n        }\n    }\n}\n", strings.Join(plain, ", "), r.Upstream)
+				} else {
+					fmt.Fprintf(&b, "\n%s {\n    reverse_proxy %s\n}\n", strings.Join(plain, ", "), r.Upstream)
+				}
 			}
 		}
 	}
@@ -278,12 +277,12 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 }
 
 // applyAvahi writes one .service file per app, the alias list (plus the static
-// redirect aliases), and manages the proxdnx-mdns publisher that turns
+// entry aliases), and manages the proxdnx-mdns publisher that turns
 // <name>.local into A records on the host IP.
 func applyAvahi(logger *log.Logger, recs []Record, cfg Config) error {
 	sites := dedupeSites(recs)
-	if len(sites) == 0 && !cfg.StaticRedirects {
-		logger.Printf("avahi: no records and static redirects disabled — nothing written")
+	if len(sites) == 0 && !cfg.Static {
+		logger.Printf("avahi: no records and static entries disabled — nothing written")
 		return nil
 	}
 	if err := os.MkdirAll(avahiServicesDir, 0o755); err != nil {
@@ -355,12 +354,11 @@ func applyAvahi(logger *log.Logger, recs []Record, cfg Config) error {
 	// already announces the host's own name on every link.
 	h := hostLabel()
 	fmt.Fprintf(&ab, "apps.%s.local %s\n", h, host)
-	// static redirect aliases: menux*.local -> host (caddy 308s them to the
+	// static entry aliases: menux*.local -> host (caddy proxies them to the
 	// ProxMenux UI). The bare <host>.local name is skipped — see applyCaddy.
 	nAliases := len(slugs) + 1
-	if cfg.StaticRedirects {
-		menuxPort := menuxPortFromURL(cfg.BaseURL)
-		for _, r := range staticRoutes(h, menuxPort) {
+	if cfg.Static {
+		for _, r := range staticRoutes(h, cfg.BaseURL) {
 			for _, n := range r.Names {
 				if n == h+".local" {
 					continue
