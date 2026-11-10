@@ -41,8 +41,13 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Checksums
+        run: sha256sum proxdnx-linux-*.tar.gz > checksums.txt
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: proxdnx-linux-*.tar.gz
+          files: |
+            proxdnx-linux-*.tar.gz
+            checksums.txt
           generate_release_notes: true

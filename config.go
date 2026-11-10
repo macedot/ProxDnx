@@ -45,11 +45,12 @@ func parseFlatYAML(data string) map[string]string {
 		}
 		k = strings.TrimSpace(k)
 		v = strings.TrimSpace(v)
-		if i := strings.Index(v, " #"); i >= 0 {
-			v = strings.TrimSpace(v[:i])
-		}
 		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			// quoted value: everything outside the quotes is decoration,
+			// so inline comments inside quotes survive intact
 			v = v[1 : len(v)-1]
+		} else if i := strings.Index(v, " #"); i >= 0 {
+			v = strings.TrimSpace(v[:i])
 		}
 		m[k] = v
 	}

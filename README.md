@@ -137,6 +137,28 @@ systemctl restart proxdnx
 
 ---
 
+## 🧪 Development
+
+```bash
+go vet ./...
+go test -race -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out | tail -1
+```
+
+CI (`.github/workflows/test.yml`) runs vet + race-enabled tests on every push
+and PR. The renderers are byte-golden-tested (renders must stay timestamp-free
+so live hosts never churn), hostile service names are injection-tested, and
+the API handlers are exercised with `httptest`.
+
+Security posture: renderer labels are slug-restricted (`[a-z0-9-]`), the
+config is validated at startup (URL scheme, interface name, CIDR, listen
+address), the API server enforces read/header/idle timeouts and `nosniff` /
+`no-store` headers, file writes are O_EXCL with pid-unique temp names, the
+monitor client caps response bodies at 8 MiB, and the installer sha256-verifies
+downloads against the release `checksums.txt`.
+
+---
+
 ## 🧩 Services
 
 | Service | Purpose |

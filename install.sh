@@ -187,15 +187,25 @@ else
     esac
     msg_ok "architecture: $ARCH"
     if [ "$VERSION" = "latest" ]; then
-        URL="https://github.com/${REPO}/releases/latest/download/proxdnx-linux-${ARCH}.tar.gz"
+        DL_URL="https://github.com/${REPO}/releases/latest/download"
     else
-        URL="https://github.com/${REPO}/releases/download/${VERSION}/proxdnx-linux-${ARCH}.tar.gz"
+        DL_URL="https://github.com/${REPO}/releases/download/${VERSION}"
     fi
     msg_info "Downloading ${VERSION}..."
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$TMP/dl.tar.gz" "$URL" || { msg_error "download failed: $URL"; exit 1; }
+    fetch() {
+        if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$2" "$1"; else wget -qO "$2" "$1"; fi
+    }
+    fetch "${DL_URL}/proxdnx-linux-${ARCH}.tar.gz" "$TMP/dl.tar.gz" || { msg_error "download failed: ${DL_URL}/proxdnx-linux-${ARCH}.tar.gz"; exit 1; }
+    if fetch "${DL_URL}/checksums.txt" "$TMP/checksums.txt"; then
+        want=$(awk '$2 == "proxdnx-linux-'"${ARCH}"'.tar.gz" {print $1}' "$TMP/checksums.txt")
+        got=$(sha256sum "$TMP/dl.tar.gz" | awk '{print $1}')
+        if [ -z "$want" ] || [ "$want" != "$got" ]; then
+            msg_error "sha256 verification FAILED for proxdnx-linux-${ARCH}.tar.gz (got ${got:-none}, want ${want:-none})"
+            exit 1
+        fi
+        msg_ok "sha256 verified"
     else
-        wget -qO "$TMP/dl.tar.gz" "$URL" || { msg_error "download failed: $URL"; exit 1; }
+        msg_warn "checksums.txt unavailable for ${VERSION} — skipping verification"
     fi
     tar -xzf "$TMP/dl.tar.gz" -C "$TMP" || { msg_error "extract failed"; exit 1; }
     [ -f "$TMP/proxdnx" ] || { msg_error "archive missing the proxdnx binary"; exit 1; }
@@ -255,6 +265,10 @@ while read -r name ip; do
     [ -z "$name" ] && continue
     case "$name" in "#"*) continue ;; esac
     [ -z "$ip" ] && continue
+    # defense in depth: the aliases file is root-owned, but never hand
+    # avahi-publish a name/IP that is not a plain label / dotted quad
+    case "$name" in *[!a-z0-9.-]*) continue ;; esac
+    case "$ip" in *[!0-9.]*) continue ;; esac
     avahi-publish -a -R "$name" "$ip" &
 done < "$ALIASES"
 wait

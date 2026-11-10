@@ -116,7 +116,9 @@ func (c *Client) ensureToken() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := c.http.Do(req.WithContext(ctx))
 	if err != nil {
 		return err
 	}
@@ -279,6 +281,16 @@ func resolveSubnet(network, bridge string, notef func(string, ...any)) (*net.IPN
 		notef("warning: could not determine subnet of %s: %v (first IPv4 wins)", bridge, err)
 		return nil, nil
 	}
+	if subnet := parseBridgeSubnet(out); subnet != nil {
+		return subnet, nil
+	}
+	notef("warning: no IPv4 on %s (first IPv4 wins)", bridge)
+	return nil, nil
+}
+
+// parseBridgeSubnet returns the first non-loopback IPv4 CIDR found in
+// `ip -4 -o addr show` output, or nil.
+func parseBridgeSubnet(out string) *net.IPNet {
 	for _, line := range strings.Split(out, "\n") {
 		for _, f := range strings.Fields(line) {
 			if strings.Contains(f, "/") && strings.Count(f, ".") == 3 {
@@ -286,12 +298,11 @@ func resolveSubnet(network, bridge string, notef func(string, ...any)) (*net.IPN
 				if err != nil || ip.IsLoopback() {
 					continue
 				}
-				return ipnet, nil
+				return ipnet
 			}
 		}
 	}
-	notef("warning: no IPv4 on %s (first IPv4 wins)", bridge)
-	return nil, nil
+	return nil
 }
 
 // pickIP returns the IPv4 inside subnet; "" when the guest has none in it.

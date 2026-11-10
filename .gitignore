@@ -1,4 +1,5 @@
 dist/
 proxdns
 lxc-services.json
-*.tmp-proxdns
+*.tmp-proxdnx*
+coverage.out

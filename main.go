@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -136,6 +138,44 @@ func setupLogging(path string) *log.Logger {
 	return log.New(io.MultiWriter(writers...), "", log.LstdFlags)
 }
 
+// validIface allows only sane Linux interface names (kernel limit: 15 bytes).
+// The value ends up as an argv element of `ip ... show dev <name>`; exec does
+// not invoke a shell, but rejecting garbage early keeps the command clean.
+func validIface(s string) bool {
+	if s == "" || len(s) > 15 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// validate fast-fails an effective config before anything is written or any
+// cycle runs. Every field here is operator-controlled; bad values should
+// refuse startup instead of producing broken renders mid-cycle.
+func (c Config) validate() error {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("url: must be an http(s) URL with a host (got %q)", c.BaseURL)
+	}
+	if !validIface(c.Bridge) {
+		return fmt.Errorf("bridge: invalid interface name %q", c.Bridge)
+	}
+	if c.Network != "" {
+		if _, _, err := net.ParseCIDR(c.Network); err != nil {
+			return fmt.Errorf("network: %v", err)
+		}
+	}
+	if _, _, err := net.SplitHostPort(c.APIAddr); err != nil {
+		return fmt.Errorf("api_addr: %v", err)
+	}
+	return nil
+}
+
 func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
@@ -218,6 +258,10 @@ func loadEffectiveConfig() (Config, error) {
 	})
 	_ = once
 
+	if err := c.validate(); err != nil {
+		return c, err
+	}
+
 	if !found {
 		// bootstrap the file with pure defaults so operators have a knob to edit
 		def := defaultConfig()
@@ -230,7 +274,20 @@ func loadEffectiveConfig() (Config, error) {
 	return c, nil
 }
 
-func (a *App) serveAPI() error {
+// secureHeaders wraps every API/portal response: the API serves untrusted-ish
+// JSON and an HTML dashboard on a LAN port, so forbid MIME sniffing and any
+// caching of domain inventories.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// routes builds the API handler tree. Separated from serveAPI so tests can
+// exercise it with httptest without binding a socket.
+func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -273,7 +330,22 @@ func (a *App) serveAPI() error {
 		_, _ = io.WriteString(w, "ok")
 	})
 	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /healthz)", a.cfg.APIAddr)
-	return http.ListenAndServe(a.cfg.APIAddr, mux)
+	return secureHeaders(mux)
+}
+
+// serveAPI runs the API server with explicit timeouts — a bare
+// ListenAndServe has no ReadHeaderTimeout and is trivially slowloris-able.
+func (a *App) serveAPI() error {
+	srv := &http.Server{
+		Addr:              a.cfg.APIAddr,
+		Handler:           a.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+	return srv.ListenAndServe()
 }
 
 // requireActive mirrors the CLI contract: the writer flags assert that the

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,10 @@ while read -r name ip; do
     [ -z "$name" ] && continue
     case "$name" in "#"*) continue ;; esac
     [ -z "$ip" ] && continue
+    # defense in depth: the aliases file is root-owned, but never hand
+    # avahi-publish a name/IP that is not a plain label / dotted quad
+    case "$name" in *[!a-z0-9.-]*) continue ;; esac
+    case "$ip" in *[!0-9.]*) continue ;; esac
     avahi-publish -a -R "$name" "$ip" &
 done < "$ALIASES"
 wait
@@ -114,49 +119,10 @@ func dedupeSites(recs []Record) map[string]Record {
 	return sites
 }
 
-func hostIP(bridge string) string {
-	out, err := execCommand([]string{"ip", "-4", "-o", "addr", "show", "dev", bridge})
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(out, "\n") {
-		for _, f := range strings.Fields(line) {
-			if strings.Contains(f, "/") && strings.Count(f, ".") == 3 {
-				ip := strings.Split(f, "/")[0]
-				if !strings.HasPrefix(ip, "127.") {
-					return ip
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// writeIfChanged writes content only when it differs; returns whether it wrote.
-func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
-	if cur, err := os.ReadFile(path); err == nil && string(cur) == content {
-		return false, nil
-	}
-	tmp := path + ".tmp-proxdnx"
-	if err := os.WriteFile(tmp, []byte(content), perm); err != nil {
-		return false, err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return false, err
-	}
-	if perm != 0 {
-		_ = os.Chmod(path, perm)
-	}
-	return true, nil
-}
-
-// hostLabel returns the sanitized short hostname used to derive the portal
-// names <host>.local and apps.<host>.local. Falls back to "proxdnx".
-func hostLabel() string {
-	h, err := os.Hostname()
-	if err != nil || h == "" {
-		return "proxdnx"
-	}
+// sanitizeHost reduces a hostname to a DNS-safe label: lower-case, first
+// dot-label only, [a-z0-9-] kept, leading/trailing dashes trimmed, fallback
+// "proxdnx" when nothing survives.
+func sanitizeHost(h string) string {
 	h = strings.ToLower(strings.TrimSpace(h))
 	if i := strings.Index(h, "."); i >= 0 {
 		h = h[:i]
@@ -171,6 +137,74 @@ func hostLabel() string {
 		return s
 	}
 	return "proxdnx"
+}
+
+// hostLabel returns the sanitized short hostname used to derive the portal
+// names <host>.local and apps.<host>.local.
+func hostLabel() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "proxdnx"
+	}
+	return sanitizeHost(h)
+}
+
+// firstIPv4 extracts the first non-loopback dotted-quad address from
+// `ip -4 -o addr show` output. ParseIP-strict: junk like 999.1.1.1 is
+// rejected instead of published as an A record.
+func firstIPv4(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		for _, f := range strings.Fields(line) {
+			if strings.Contains(f, "/") && strings.Count(f, ".") == 3 {
+				ip := strings.Split(f, "/")[0]
+				if p := net.ParseIP(ip); p != nil && p.To4() != nil && !p.IsLoopback() {
+					return ip
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func hostIP(bridge string) string {
+	out, err := execCommand([]string{"ip", "-4", "-o", "addr", "show", "dev", bridge})
+	if err != nil {
+		return ""
+	}
+	return firstIPv4(out)
+}
+
+// writeIfChanged writes content only when it differs; returns whether it wrote.
+// The temp file gets a pid-unique name and O_CREATE|O_EXCL: an existing file
+// (or symlink planted at the predictable legacy name) can never be followed or
+// clobbered — the write either creates a fresh file atomically or fails.
+func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
+	if cur, err := os.ReadFile(path); err == nil && string(cur) == content {
+		return false, nil
+	}
+	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return false, err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	return true, nil
 }
 
 // applyCaddy renders the Caddyfile and reloads caddy when it changed.
@@ -193,6 +227,45 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 			logger.Printf("caddy: existing unmanaged Caddyfile backed up -> %s", bak)
 		}
 	}
+	content := renderCaddyfile(sites, cfg, hostLabel())
+	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
+		logger.Printf("caddy: unchanged (%d sites)", len(sites))
+		return nil
+	}
+	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", caddyfile, os.Getpid())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.WriteString(content)
+	cerr := f.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmp)
+		if werr != nil {
+			return werr
+		}
+		return cerr
+	}
+	if out, err := execCommand([]string{"caddy", "validate", "--config", tmp, "--adapter", "caddyfile"}); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("generated config failed validation: %s", trunc(out, 400))
+	}
+	if err := os.Rename(tmp, caddyfile); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := run("systemctl", "reload", "caddy"); err != nil {
+		return fmt.Errorf("reload failed: %v", err)
+	}
+	logger.Printf("caddy: wrote %s (%d sites) and reloaded", caddyfile, len(sites))
+	return nil
+}
+
+// renderCaddyfile is the pure byte-level renderer: header comment, local_certs
+// global, one https (+ optional plain-http twin) block per app, the static
+// infrastructure blocks, and the portal block on apps.<host>.local only.
+// No timestamps — output must be byte-stable so cycles stay idempotent.
+func renderCaddyfile(sites map[string]Record, cfg Config, host string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s (ProxDnx)\n", managedBy)
 	// no timestamps in rendered output: keeps cycles idempotent (no rewrite churn)
@@ -221,9 +294,8 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 	// here: re-announcing it with a different A record triggers an avahi
 	// conflict rename); menux*.local + apps.<host>.local are published by
 	// proxdnx-mdns-publish via the alias list below.
-	h := hostLabel()
 	if cfg.Static {
-		for _, r := range staticRoutes(h, cfg.BaseURL) {
+		for _, r := range staticRoutes(host, cfg.BaseURL) {
 			names := make([]string, 0, len(r.Names))
 			for _, n := range r.Names {
 				names = append(names, "https://"+n)
@@ -249,31 +321,52 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 	}
 	// portal: apps dashboard served by this daemon's API server — only on
 	// apps.<host>.local.
-	fmt.Fprintf(&b, "\nhttps://apps.%s.local {\n    reverse_proxy %s\n}\n", h, cfg.APIAddr)
+	fmt.Fprintf(&b, "\nhttps://apps.%s.local {\n    reverse_proxy %s\n}\n", host, cfg.APIAddr)
 	if cfg.HTTP {
-		fmt.Fprintf(&b, "\nhttp://apps.%s.local {\n    reverse_proxy %s\n}\n", h, cfg.APIAddr)
+		fmt.Fprintf(&b, "\nhttp://apps.%s.local {\n    reverse_proxy %s\n}\n", host, cfg.APIAddr)
 	}
-	content := b.String()
-	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
-		logger.Printf("caddy: unchanged (%d sites)", len(sites))
-		return nil
+	return b.String()
+}
+
+// renderAliases is the pure alias-list renderer: one "name IP" line per app
+// slug, apps.<host>.local for the portal, plus the static entry names. The
+// bare <host>.local name is skipped — the OS avahi daemon already announces
+// the host's own name, and re-announcing it would conflict-rename.
+func renderAliases(sites map[string]Record, cfg Config, hostIP, host string) string {
+	var ab strings.Builder
+	fmt.Fprintf(&ab, "# %s (ProxDnx)\n# all aliases point at the host so caddy can route by Host header\n", managedBy)
+	slugs := make([]string, 0, len(sites))
+	for s := range sites {
+		slugs = append(slugs, s)
 	}
-	tmp := caddyfile + ".tmp-proxdnx"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return err
+	sort.Strings(slugs)
+	for _, s := range slugs {
+		fmt.Fprintf(&ab, "%s.local %s\n", s, hostIP)
 	}
-	if out, err := execCommand([]string{"caddy", "validate", "--config", tmp, "--adapter", "caddyfile"}); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("generated config failed validation: %s", trunc(out, 400))
+	fmt.Fprintf(&ab, "apps.%s.local %s\n", host, hostIP)
+	if cfg.Static {
+		for _, r := range staticRoutes(host, cfg.BaseURL) {
+			for _, n := range r.Names {
+				if n == host+".local" {
+					continue
+				}
+				fmt.Fprintf(&ab, "%s %s\n", n, hostIP)
+			}
+		}
 	}
-	if err := os.Rename(tmp, caddyfile); err != nil {
-		return err
+	return ab.String()
+}
+
+// countAliases counts publishable "name ip" lines (comments/blanks excluded).
+func countAliases(content string) int {
+	n := 0
+	for _, l := range strings.Split(content, "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "#") {
+			n++
+		}
 	}
-	if err := run("systemctl", "reload", "caddy"); err != nil {
-		return fmt.Errorf("reload failed: %v", err)
-	}
-	logger.Printf("caddy: wrote %s (%d sites) and reloaded", caddyfile, len(sites))
-	return nil
+	return n
 }
 
 // applyAvahi writes one .service file per app, the alias list (plus the static
@@ -344,31 +437,13 @@ func applyAvahi(logger *log.Logger, recs []Record, cfg Config) error {
 	if host == "" {
 		return fmt.Errorf("could not determine host IPv4 on %s for alias publishing", cfg.Bridge)
 	}
-	var ab strings.Builder
-	fmt.Fprintf(&ab, "# %s (ProxDnx)\n# all aliases point at the host so caddy can route by Host header\n", managedBy)
-	for _, s := range slugs {
-		fmt.Fprintf(&ab, "%s.local %s\n", s, host)
-	}
 	// portal alias: apps dashboard, reachable as apps.<host>.local (caddy ->
-	// daemon API). <host>.local itself needs no record: the OS avahi daemon
-	// already announces the host's own name on every link.
-	h := hostLabel()
-	fmt.Fprintf(&ab, "apps.%s.local %s\n", h, host)
-	// static entry aliases: menux*.local -> host (caddy proxies them to the
-	// ProxMenux UI). The bare <host>.local name is skipped — see applyCaddy.
-	nAliases := len(slugs) + 1
-	if cfg.Static {
-		for _, r := range staticRoutes(h, cfg.BaseURL) {
-			for _, n := range r.Names {
-				if n == h+".local" {
-					continue
-				}
-				fmt.Fprintf(&ab, "%s %s\n", n, host)
-				nAliases++
-			}
-		}
-	}
-	aliasesChanged, err := writeIfChanged(avahiAliases, ab.String(), 0o644)
+	// daemon API); static entry aliases (menux*.local) appended by
+	// renderAliases. <host>.local itself never gets a record — see
+	// renderCaddyfile.
+	aliases := renderAliases(sites, cfg, host, hostLabel())
+	nAliases := countAliases(aliases)
+	aliasesChanged, err := writeIfChanged(avahiAliases, aliases, 0o644)
 	if err != nil {
 		return err
 	}
