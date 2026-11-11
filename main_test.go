@@ -17,15 +17,15 @@ import (
 func newTestApp(domains []Record) *App {
 	return &App{
 		cfg: Config{
-			BaseURL: "http://127.0.0.1:8008",
-			Bridge:  "vmbr0",
-			Static:  true,
-			HTTP:    true,
-			APIAddr: "127.0.0.1:9973",
-			Path:    "/tmp/fake-config.yaml",
+			BaseURL:  "http://127.0.0.1:8008",
+			Bridge:   "vmbr0",
+			Static:   true,
+			HTTP:     true,
+			APIAddr:  "127.0.0.1:9973",
+			Path:     "/tmp/fake-config.yaml",
 			Interval: time.Minute,
-			Caddy:   true,
-			Avahi:   true,
+			Caddy:    true,
+			Avahi:    true,
 		},
 		log:     log.New(io.Discard, "", 0),
 		domains: domains,
@@ -351,6 +351,37 @@ func TestRequireActiveRefusesUnknown(t *testing.T) {
 	// error — never a silent pass
 	if err := requireActive("proxdnx-no-such-unit-xyz"); err == nil {
 		t.Error("unknown unit must fail requireActive")
+	}
+}
+
+func TestPortalHTML(t *testing.T) {
+	off := portalHTML(false)
+	if !strings.Contains(off, "const FORCE_HTTPS=false;") {
+		t.Error("force=false must bake false into the page")
+	}
+	if strings.Contains(off, "__FORCE_HTTPS__") {
+		t.Error("placeholder leaked into rendered page")
+	}
+	on := portalHTML(true)
+	if !strings.Contains(on, "const FORCE_HTTPS=true;") {
+		t.Error("force=true must bake true into the page")
+	}
+	// both app cards and infrastructure cards must derive the protocol from
+	// the page access, never hardcode it
+	if strings.Count(off, `href="'+proto()+'//`) != 2 {
+		t.Errorf("cards must use proto() for both sections: %d sites", strings.Count(off, `href="'+proto()+'//`))
+	}
+	if strings.Contains(off, `href="https://'+`) {
+		t.Error("hardcoded https link generation still present")
+	}
+}
+
+func TestRoutesPortalRendersFlag(t *testing.T) {
+	app := newTestApp(nil)
+	app.cfg.ForceHTTPS = true
+	_, body := get(t, app.routes(), "/")
+	if !strings.Contains(body, "const FORCE_HTTPS=true;") {
+		t.Error("portal must render with force flag baked in")
 	}
 }
 

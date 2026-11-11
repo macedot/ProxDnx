@@ -37,7 +37,7 @@ func TestSanitizeHost(t *testing.T) {
 		"My-Host!":          "my-host",
 		"  spaced  ":        "spaced",
 		"--x--":             "x",
-		"höst.local":     "hst", // dot-label cut first, non-ascii dropped
+		"höst.local":        "hst", // dot-label cut first, non-ascii dropped
 		"...":               "proxdnx",
 		"":                  "proxdnx",
 	}

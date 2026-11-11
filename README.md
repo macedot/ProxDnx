@@ -117,6 +117,7 @@ curl http://<your-proxmox-ip>:9973/api/domains
 | `caddy` / `avahi` | `true` (installer) | Enable each writer |
 | `http` | `true` | Serve plain `http://name.local` on :80 alongside HTTPS (no redirect) |
 | `static` | `true` | Static infra entries, proxied like apps (no port URLs): `<host>.local` → Proxmox UI, `menux*.local` → ProxMenux; listed separately on the portal |
+| `force_https` | `false` | Portal always generates `https://` links, even when the dashboard itself is opened over plain http |
 | `api_addr` | `127.0.0.1:9973` | API listen address |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |
