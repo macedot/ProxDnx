@@ -43,6 +43,9 @@ const portalHTMLRaw = `<!doctype html>
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
   .chip{background:#262a30;border:1px solid var(--border);border-radius:6px;padding:2px 8px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
   .chip b{color:var(--text);font-weight:600}
+  .chip.bad{color:#ff6b6b;border-color:#7a3a3a;background:#2a1a1a}
+  .chip.warn{color:#ffb86b;border-color:#7a5c2a;background:#2a2318}
+  .card.dim{opacity:.55}
   footer{padding:0 32px 26px;color:var(--muted);font-size:12px}
   .empty{padding:40px 32px;color:var(--muted)}
 </style>
@@ -68,9 +71,12 @@ async function load(){
     const g=document.getElementById("grid");
     g.innerHTML="";
     (d.domains||[]).forEach(x=>{
-      const c=document.createElement("div");c.className="card";
+      const c=document.createElement("div");c.className="card"+(x.stale?" dim":"");
+      const flags=(x.stale?'<span class="chip bad">⚠ stale — port closed</span>':'')
+        +(x.mismatch?'<span class="chip warn">⚠ name mismatch — page title: "'+esc(x.title||"?")+'"</span>':'');
       c.innerHTML='<a class="domain" href="'+proto()+'//'+esc(x.domain)+'/">'+esc(x.domain)+'</a>'
         +'<div class="svc">'+esc(x.service)+'</div>'
+        +(flags?'<div class="chips">'+flags+'</div>':'')
         +'<div class="chips"><span class="chip">🖥 <b>'+esc(x.name)+'</b></span>'
         +'<span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span></div>';
       g.appendChild(c);

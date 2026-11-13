@@ -38,11 +38,14 @@ func NewClient(cfg Config) *Client {
 
 // Record is one published domain.
 type Record struct {
-	Domain  string `json:"domain"`
-	Service string `json:"service"` // ProxMenux Apps service name
-	Name    string `json:"name"`    // LXC hostname
-	IP      string `json:"ip"`
-	Port    int    `json:"port"`
+	Domain   string `json:"domain"`
+	Service  string `json:"service"` // ProxMenux Apps service name
+	Name     string `json:"name"`    // LXC hostname
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Stale    bool   `json:"stale,omitempty"`    // TCP probe failed: port closed
+	Title    string `json:"title,omitempty"`    // detected UI page title ("" unknown)
+	Mismatch bool   `json:"mismatch,omitempty"` // detected UI title disagrees with Service
 }
 
 type Guest struct {
@@ -222,50 +225,140 @@ func (c *Client) fetchRecords(cfg Config, notef func(string, ...any)) ([]Record,
 }
 
 const (
-	probeTimeout = 1200 * time.Millisecond
-	probeWorkers = 16
+	probeTimeout    = 1200 * time.Millisecond
+	probeWorkers    = 16
+	identityTimeout = 2500 * time.Millisecond
 )
 
-// probeRecords drops records whose upstream port refuses connections. The
-// monitor's app_watches carry catalog data that goes stale when guests are
-// repurposed, and a closed port just makes a dead .local card. TCP connect
-// only: protocol-agnostic, so https-only listeners (Vaultwarden :443) pass.
+// probeRecords tags every record with liveness: Stale when the TCP port
+// refuses connections, plus a UI-title identity check (plain HTTP, redirects
+// followed) whose disagreement with the registered name sets Mismatch.
+// Records are NEVER dropped here — stale ones stay visible on the portal,
+// tagged; cycle() excludes them from caddy/avahi instead.
 func probeRecords(recs []Record, timeout time.Duration, workers int, logf func(string, ...any)) []Record {
 	type result struct {
-		idx int
-		ok  bool
+		idx   int
+		stale bool
+		title string
 	}
 	results := make(chan result, len(recs))
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	for i, r := range recs {
 		wg.Add(1)
-		go func(idx int, addr string) {
+		go func(idx int, addr string, service string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			c, err := net.DialTimeout("tcp", addr, timeout)
-			if err == nil {
-				c.Close()
+			if err != nil {
+				results <- result{idx: idx, stale: true}
+				return
 			}
-			results <- result{idx, err == nil}
-		}(i, net.JoinHostPort(r.IP, strconv.Itoa(r.Port)))
+			c.Close()
+			title := identifyTitle(addr)
+			results <- result{idx: idx, title: title}
+		}(i, net.JoinHostPort(r.IP, strconv.Itoa(r.Port)), r.Service)
 	}
 	wg.Wait()
 	close(results)
-	alive := make(map[int]bool, len(recs))
+	byIdx := make(map[int]result, len(recs))
 	for res := range results {
-		alive[res.idx] = res.ok
+		byIdx[res.idx] = res
 	}
 	out := make([]Record, 0, len(recs))
 	for i, r := range recs {
-		if alive[i] {
-			out = append(out, r)
+		res := byIdx[i]
+		if res.stale {
+			logf("stale %s -> %s:%d (port closed, shown tagged on portal, not published)", r.Domain, r.IP, r.Port)
+			r.Stale = true
+		} else if identityMismatch(r.Service, res.title) {
+			logf("mismatch %s -> %s:%d (registered %q, page title %q)", r.Domain, r.IP, r.Port, r.Service, res.title)
+			r.Title = res.title
+			r.Mismatch = true
 		} else {
-			logf("stale %s -> %s:%d (port closed, not published)", r.Domain, r.IP, r.Port)
+			r.Title = res.title
 		}
+		out = append(out, r)
 	}
 	return out
+}
+
+var titleRe = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)`)
+
+// identityClient is shared by the identity probes; total timeout includes
+// redirects. Purely informational: failures yield no title, never errors.
+var identityClient = &http.Client{Timeout: identityTimeout}
+
+// identifyTitle fetches the service's UI page title over plain HTTP.
+func identifyTitle(addr string) string {
+	resp, err := identityClient.Get("http://" + addr + "/")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	if err != nil {
+		return ""
+	}
+	m := titleRe.FindSubmatch(b)
+	if m == nil {
+		return ""
+	}
+	t := strings.TrimSpace(string(m[1]))
+	if len(t) > 100 {
+		t = t[:100]
+	}
+	return t
+}
+
+// genericTitles carry no identity: they are what any auth-gated or
+// generated UI answers with, so they can never confirm or contradict a name.
+var genericTitles = []string{"login", "unauthorized", "sign in", "signin", "forbidden", "swagger", "welcome"}
+
+// identityMismatch reports a disagreement between the registered service name
+// and the UI title the endpoint actually serves. Slug containment (either
+// direction) counts as agreement — "qBittorrent Web UI" vs "qBittorrent" —
+// as does token-prefix agreement — "Cloudflare Tunnel WebUI" vs
+// "Cloudflared" (cloudflare/cloudflared share the prefix). The incident case
+// (registered Bazarr, page says Sonarr) still flags.
+func identityMismatch(service, title string) bool {
+	if service == "" || title == "" {
+		return false
+	}
+	tl := strings.ToLower(title)
+	for _, g := range genericTitles {
+		if strings.Contains(tl, g) {
+			return false
+		}
+	}
+	s, t := slugify(service), slugify(title)
+	if s == "" || t == "" {
+		return false
+	}
+	if strings.Contains(t, s) || strings.Contains(s, t) {
+		return false
+	}
+	for _, st := range strings.Split(s, "-") {
+		if len(st) < 5 {
+			continue
+		}
+		for _, tt := range strings.Split(t, "-") {
+			if len(tt) < 5 {
+				continue
+			}
+			if strings.HasPrefix(st, tt) || strings.HasPrefix(tt, st) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// publishable reports whether a record is rendered into caddy/avahi: stale
+// records stay visible on the portal (tagged) but are not published.
+func publishable(r Record) bool {
+	return !r.Stale
 }
 
 // guestPorts merges app_watch catalog ports with docker/native discovery.

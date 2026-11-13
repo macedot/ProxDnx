@@ -125,8 +125,8 @@ func TestPickIPFallback(t *testing.T) {
 	}
 }
 
-// TestProbeRecords: records behind closed ports must be dropped (they become
-// dead .local cards), live listeners kept, and order preserved.
+// TestProbeRecords: closed ports are KEPT but tagged stale (visibility beats
+// deletion), live listeners stay untagged, and order is preserved.
 func TestProbeRecords(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -150,15 +150,87 @@ func TestProbeRecords(t *testing.T) {
 		{Domain: "dead.local", IP: "127.0.0.1", Port: 1}, // nothing listens on tcp/1
 	}
 	got := probeRecords(recs, 800*time.Millisecond, 8, func(string, ...any) {})
-	if len(got) != 1 || got[0].Domain != "alive.local" {
-		t.Fatalf("probe kept wrong records: %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("stale records must be kept, not dropped: %+v", got)
+	}
+	byDomain := map[string]Record{}
+	for _, r := range got {
+		byDomain[r.Domain] = r
+	}
+	if !byDomain["dead.local"].Stale {
+		t.Errorf("dead record must be tagged stale: %+v", byDomain["dead.local"])
+	}
+	if byDomain["alive.local"].Stale {
+		t.Errorf("live record must not be stale: %+v", byDomain["alive.local"])
 	}
 }
 
-// TestFetchRecordsDropsClosedPorts is the regression test for the stale
-// app_watches incident: a catalog watch pointing at a dead port must not be
-// published, while a live discovery-found port on the same guest survives.
-func TestFetchRecordsDropsClosedPorts(t *testing.T) {
+func TestIdentityMismatch(t *testing.T) {
+	cases := []struct {
+		service, title string
+		want           bool
+	}{
+		{"Sonarr", "Sonarr - Login", false},               // containment
+		{"qBittorrent", "qBittorrent Web UI", false},      // containment
+		{"Cloudflared", "Cloudflare Tunnel WebUI", false}, // token-prefix agreement
+		{"AdGuard Home", "Login", false},                  // generic title
+		{"Plex", "Unauthorized", false},                   // generic title
+		{"FlareSolverr", "FastAPI - Swagger UI", false},   // generic title
+		{"Bazarr", "Sonarr", true},                        // the incident
+		{"Kept", "", false},                               // no title: no verdict
+		{"", "Something", false},                          // no service: no verdict
+	}
+	for _, tc := range cases {
+		if got := identityMismatch(tc.service, tc.title); got != tc.want {
+			t.Errorf("identityMismatch(%q, %q) = %v, want %v", tc.service, tc.title, got, tc.want)
+		}
+	}
+}
+
+// TestProbeRecordsIdentity: an HTTP endpoint whose title disagrees with the
+// registered name is tagged mismatch with the title as evidence.
+func TestProbeRecordsIdentity(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html><head><title>RealApp</title></head><body>up</body></html>"))
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	portN, _ := strconv.Atoi(port)
+
+	recs := []Record{
+		{Domain: "a.local", IP: "127.0.0.1", Port: portN, Service: "OtherApp"},
+		{Domain: "b.local", IP: "127.0.0.1", Port: portN, Service: "RealApp"},
+	}
+	got := probeRecords(recs, 800*time.Millisecond, 8, func(string, ...any) {})
+	if len(got) != 2 {
+		t.Fatalf("all records kept: %+v", got)
+	}
+	if !got[0].Mismatch || got[0].Title != "RealApp" {
+		t.Errorf("mismatched record not tagged with evidence: %+v", got[0])
+	}
+	if got[1].Mismatch {
+		t.Errorf("matching record must not be flagged: %+v", got[1])
+	}
+}
+
+// TestPublishable: stale records stay on the portal but are excluded from
+// caddy/avahi rendering.
+func TestPublishable(t *testing.T) {
+	if !publishable(Record{Domain: "ok.local"}) {
+		t.Error("healthy record must be publishable")
+	}
+	if publishable(Record{Domain: "dead.local", Stale: true}) {
+		t.Error("stale record must not be published")
+	}
+	if !publishable(Record{Domain: "renamed.local", Mismatch: true}) {
+		t.Error("mismatch-only records must stay published (informational)")
+	}
+}
+
+// TestFetchRecordsStaleTagged: with probing on, a stale catalog watch port
+// survives in the API tagged stale (NOT dropped), while a live discovery port
+// on the same guest survives untagged — on loopback, deterministically.
+func TestFetchRecordsStaleTagged(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +246,6 @@ func TestFetchRecordsDropsClosedPorts(t *testing.T) {
 		}
 	}()
 	_, livePort, _ := net.SplitHostPort(ln.Addr().String())
-	livePortN, _ := strconv.Atoi(livePort)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/vms", func(w http.ResponseWriter, r *http.Request) {
@@ -197,19 +268,34 @@ func TestFetchRecordsDropsClosedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchRecords: %v", err)
 	}
-	if len(recs) != 1 || recs[0].Domain != "realapp.local" || recs[0].Port != livePortN {
-		t.Fatalf("dead watch port must be dropped, live one kept: %+v", recs)
+	if len(recs) != 2 {
+		t.Fatalf("stale record must stay visible: %+v", recs)
 	}
+	byDomain := map[string]Record{}
+	for _, r := range recs {
+		byDomain[r.Domain] = r
+	}
+	if !byDomain["staleapp.local"].Stale {
+		t.Errorf("stale watch record must be tagged: %+v", byDomain["staleapp.local"])
+	}
+	if byDomain["realapp.local"].Stale || byDomain["realapp.local"].Port != mustAtoi(livePort) {
+		t.Errorf("live record must survive untagged: %+v", byDomain["realapp.local"])
+	}
+	// and exactly one of them is publishable
+	pub := 0
+	for _, r := range recs {
+		if publishable(r) {
+			pub++
+		}
+	}
+	if pub != 1 {
+		t.Errorf("publishable count: %d, want 1", pub)
+	}
+}
 
-	// probe disabled: nothing is dropped
-	cfg2 := Config{BaseURL: srv.URL, Network: "127.0.0.0/8", Probe: false}
-	recs2, err := NewClient(cfg2).fetchRecords(cfg2, func(string, ...any) {})
-	if err != nil {
-		t.Fatalf("fetchRecords: %v", err)
-	}
-	if len(recs2) != 2 {
-		t.Fatalf("probe=false must keep both records: %+v", recs2)
-	}
+func mustAtoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 func TestParseBridgeSubnet(t *testing.T) {
@@ -311,8 +397,8 @@ func TestFetchRecords(t *testing.T) {
 }
 
 // TestFetchRecordsProbePrunes: with probing on, the stale catalog port
-// (tcp/1, always refused) is dropped while the actually-listening discovery
-// port survives — on the same guest, deterministically via loopback.
+// (tcp/1, always refused) stays in the API tagged stale while the actually-
+// listening discovery port survives untagged — loopback, deterministic.
 func TestFetchRecordsProbePrunes(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -345,8 +431,20 @@ func TestFetchRecordsProbePrunes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchRecords: %v", err)
 	}
-	if len(recs) != 1 || recs[0].Domain != "app.local" || recs[0].Port != ln.Addr().(*net.TCPAddr).Port {
-		t.Fatalf("only the live port must survive: %+v", recs)
+	if len(recs) != 2 {
+		t.Fatalf("both records must stay visible: %+v", recs)
+	}
+	staleN, liveN := 0, 0
+	for _, r := range recs {
+		if r.Stale && r.Port == 1 {
+			staleN++
+		}
+		if !r.Stale && r.Port == ln.Addr().(*net.TCPAddr).Port {
+			liveN++
+		}
+	}
+	if staleN != 1 || liveN != 1 {
+		t.Fatalf("want 1 stale + 1 live, got %+v", recs)
 	}
 }
 

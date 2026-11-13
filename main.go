@@ -408,14 +408,21 @@ func (a *App) cycle(ctx context.Context) error {
 	}
 
 	// render + apply; a writer failure is logged, not fatal — the daemon and
-	// API keep serving the last known good state.
+	// API keep serving the last known good state. Stale records stay on the
+	// portal (tagged) but are not published into caddy/avahi.
+	publish := make([]Record, 0, len(recs))
+	for _, r := range recs {
+		if publishable(r) {
+			publish = append(publish, r)
+		}
+	}
 	if a.cfg.Caddy {
-		if err := applyCaddy(a.log, recs, a.cfg); err != nil {
+		if err := applyCaddy(a.log, publish, a.cfg); err != nil {
 			a.log.Printf("caddy: apply failed: %v", err)
 		}
 	}
 	if a.cfg.Avahi {
-		if err := applyAvahi(a.log, recs, a.cfg); err != nil {
+		if err := applyAvahi(a.log, publish, a.cfg); err != nil {
 			a.log.Printf("avahi: apply failed: %v", err)
 		}
 	}
