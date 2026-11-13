@@ -207,6 +207,14 @@ func writeIfChanged(path, content string, perm os.FileMode) (bool, error) {
 	return true, nil
 }
 
+// hasManagedMarker reports whether content carries our management marker,
+// case-insensitively: our files say "managed by ProxDnx" while the legacy
+// python-era markers said "managed by proxdns" — a case-sensitive contains
+// matched neither and re-backed-up the same managed file every cycle.
+func hasManagedMarker(content string) bool {
+	return strings.Contains(strings.ToLower(content), managedByPrefix)
+}
+
 // applyCaddy renders the Caddyfile and reloads caddy when it changed.
 // TLS uses Caddy's internal CA (no public CA can issue for .local); every site
 // label is https:// so caddy binds 443 and auto-redirects 80.
@@ -221,7 +229,7 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 		return nil
 	}
 	cur, _ := os.ReadFile(caddyfile)
-	if len(strings.TrimSpace(string(cur))) > 0 && !strings.Contains(string(cur), managedByPrefix) {
+	if len(strings.TrimSpace(string(cur))) > 0 && !hasManagedMarker(string(cur)) {
 		bak := fmt.Sprintf("%s.pre-proxdnx-%s", caddyfile, time.Now().Format("20060102-150405"))
 		if err := os.WriteFile(bak, cur, 0o644); err == nil {
 			logger.Printf("caddy: existing unmanaged Caddyfile backed up -> %s", bak)
@@ -414,7 +422,7 @@ func applyAvahi(logger *log.Logger, recs []Record, cfg Config) error {
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(cur), managedByPrefix) {
+		if hasManagedMarker(string(cur)) {
 			if err := os.Remove(path); err == nil {
 				removed = append(removed, name)
 			}

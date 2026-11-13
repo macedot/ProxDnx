@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -187,7 +188,11 @@ func (c *Client) fetchRecords(cfg Config, notef func(string, ...any)) ([]Record,
 		if ip == "" {
 			continue
 		}
-		for _, e := range c.guestPorts(g, cfg.Scan) {
+		ports := c.guestPorts(g, cfg.Scan)
+		if len(ports) == 0 {
+			notef("note: guest %s (%d) has no discoverable ports — not published", g.Name, g.VMID)
+		}
+		for _, e := range ports {
 			if e.port == 0 {
 				continue
 			}
@@ -210,7 +215,57 @@ func (c *Client) fetchRecords(cfg Config, notef func(string, ...any)) ([]Record,
 		}
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Domain < recs[j].Domain })
+	if cfg.Probe {
+		recs = probeRecords(recs, probeTimeout, probeWorkers, notef)
+	}
 	return recs, nil
+}
+
+const (
+	probeTimeout = 1200 * time.Millisecond
+	probeWorkers = 16
+)
+
+// probeRecords drops records whose upstream port refuses connections. The
+// monitor's app_watches carry catalog data that goes stale when guests are
+// repurposed, and a closed port just makes a dead .local card. TCP connect
+// only: protocol-agnostic, so https-only listeners (Vaultwarden :443) pass.
+func probeRecords(recs []Record, timeout time.Duration, workers int, logf func(string, ...any)) []Record {
+	type result struct {
+		idx int
+		ok  bool
+	}
+	results := make(chan result, len(recs))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i, r := range recs {
+		wg.Add(1)
+		go func(idx int, addr string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			c, err := net.DialTimeout("tcp", addr, timeout)
+			if err == nil {
+				c.Close()
+			}
+			results <- result{idx, err == nil}
+		}(i, net.JoinHostPort(r.IP, strconv.Itoa(r.Port)))
+	}
+	wg.Wait()
+	close(results)
+	alive := make(map[int]bool, len(recs))
+	for res := range results {
+		alive[res.idx] = res.ok
+	}
+	out := make([]Record, 0, len(recs))
+	for i, r := range recs {
+		if alive[i] {
+			out = append(out, r)
+		} else {
+			logf("stale %s -> %s:%d (port closed, not published)", r.Domain, r.IP, r.Port)
+		}
+	}
+	return out
 }
 
 // guestPorts merges app_watch catalog ports with docker/native discovery.
@@ -306,6 +361,37 @@ func parseBridgeSubnet(out string) *net.IPNet {
 }
 
 // pickIP returns the IPv4 inside subnet; "" when the guest has none in it.
+// Guests with no subnet IP fall back to their first usable global IPv4 so
+// guests hosted on other bridges (e.g. a gluetun-side 10.77.x address) are
+// still published — caddy proxies from the host, which reaches them. Docker
+// bridges, CGNAT (tailscale) and link-local ranges never qualify.
+var fallbackExclude = []*net.IPNet{
+	mustCIDR("100.64.0.0/10"),  // CGNAT / tailscale
+	mustCIDR("172.16.0.0/12"),  // docker bridges
+	mustCIDR("169.254.0.0/16"), // link-local
+}
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic("bad builtin CIDR " + s)
+	}
+	return n
+}
+
+func excludedIP(ip string) bool {
+	p := net.ParseIP(ip)
+	if p == nil || p.IsLoopback() || !p.IsGlobalUnicast() {
+		return true
+	}
+	for _, n := range fallbackExclude {
+		if n.Contains(p) {
+			return true
+		}
+	}
+	return false
+}
+
 func pickIP(ips []string, subnet *net.IPNet) string {
 	v4 := []string{}
 	for _, ip := range ips {
@@ -316,12 +402,16 @@ func pickIP(ips []string, subnet *net.IPNet) string {
 	if len(v4) == 0 {
 		return ""
 	}
-	if subnet == nil {
-		return v4[0]
+	if subnet != nil {
+		for _, ip := range v4 {
+			p := net.ParseIP(ip)
+			if p != nil && subnet.Contains(p) {
+				return ip
+			}
+		}
 	}
 	for _, ip := range v4 {
-		p := net.ParseIP(ip)
-		if p != nil && subnet.Contains(p) {
+		if !excludedIP(ip) {
 			return ip
 		}
 	}

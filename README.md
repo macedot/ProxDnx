@@ -118,6 +118,7 @@ curl http://<your-proxmox-ip>:9973/api/domains
 | `http` | `true` | Serve plain `http://name.local` on :80 alongside HTTPS (no redirect) |
 | `static` | `true` | Static infra entries, proxied like apps (no port URLs): `<host>.local` → Proxmox UI, `menux*.local` → ProxMenux; listed separately on the portal |
 | `force_https` | `false` | Portal always generates `https://` links, even when the dashboard itself is opened over plain http |
+| `probe` | `true` | TCP-probe every candidate port each cycle; ports that refuse connections are dropped and logged as `stale` instead of becoming dead `.local` cards |
 | `api_addr` | `127.0.0.1:9973` | API listen address |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -275,6 +276,43 @@ func TestHostIPLive(t *testing.T) {
 	}
 	if got := hostIP("proxdnx-no-such-if"); got != "" {
 		t.Errorf("missing iface must yield \"\", got %q", got)
+	}
+}
+
+// TestHasManagedMarker: regression for the backup storm — the Caddyfile
+// marker is mixed-case ("managed by ProxDnx"), the legacy python/avahi
+// markers were all-lowercase ("managed by proxdns"). Detection must match
+// both flavors; a case-sensitive contains re-backed-up our own managed
+// Caddyfile every single cycle for days.
+func TestHasManagedMarker(t *testing.T) {
+	for _, content := range []string{
+		"# managed by ProxDnx (ProxDnx)\nhttps://x.local {}",
+		"<!-- managed by proxdnx (ProxDnx) -->",
+		"# managed by proxdns",
+	} {
+		if !hasManagedMarker(content) {
+			t.Errorf("marker not detected in %q", content)
+		}
+	}
+	for _, content := range []string{
+		"# a normal caddyfile",
+		"managed by someone else entirely",
+		"",
+	} {
+		if hasManagedMarker(content) {
+			t.Errorf("false positive on %q", content)
+		}
+	}
+}
+
+// TestHasManagedMarkerSelfDetect: the exact strings our writers emit must
+// always be self-detected, or every cycle would back up its own files.
+func TestHasManagedMarkerSelfDetect(t *testing.T) {
+	if !hasManagedMarker(fmt.Sprintf("# %s (ProxDnx)\n", managedBy)) {
+		t.Error("our own caddyfile header must be detected")
+	}
+	if !hasManagedMarker(fmt.Sprintf(avahiTemplate, "X", 1)) {
+		t.Error("our own avahi service file must be detected")
 	}
 }
 

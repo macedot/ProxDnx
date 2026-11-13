@@ -5,8 +5,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSlugify(t *testing.T) {
@@ -97,6 +99,119 @@ func TestPickIP(t *testing.T) {
 	}
 }
 
+// TestPickIPFallback: guests with no IP on the host bridge subnet (e.g.
+// byparr living only on the gluetun-side bridge) must still be published —
+// caddy proxies from the host, which reaches them. Docker bridges, CGNAT
+// (tailscale) and link-local ranges must never be picked as fallback.
+func TestPickIPFallback(t *testing.T) {
+	_, subnet, _ := net.ParseCIDR("10.4.2.0/24")
+	if got := pickIP([]string{"10.77.0.39"}, subnet); got != "10.77.0.39" {
+		t.Errorf("other-bridge guest must fall back to its IP, got %q", got)
+	}
+	if got := pickIP([]string{"172.17.0.5"}, subnet); got != "" {
+		t.Errorf("docker-bridge IP must never be picked, got %q", got)
+	}
+	if got := pickIP([]string{"100.86.231.25"}, subnet); got != "" {
+		t.Errorf("CGNAT/tailscale IP must never be picked, got %q", got)
+	}
+	if got := pickIP([]string{"169.254.9.9"}, subnet); got != "" {
+		t.Errorf("link-local must never be picked, got %q", got)
+	}
+	if got := pickIP([]string{"172.17.0.5", "10.77.1.12"}, subnet); got != "10.77.1.12" {
+		t.Errorf("docker entry must be skipped in favor of usable fallback, got %q", got)
+	}
+	if got := pickIP([]string{"10.77.0.39", "10.4.2.42"}, subnet); got != "10.4.2.42" {
+		t.Errorf("subnet match must still win over fallback, got %q", got)
+	}
+}
+
+// TestProbeRecords: records behind closed ports must be dropped (they become
+// dead .local cards), live listeners kept, and order preserved.
+func TestProbeRecords(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	portN, _ := strconv.Atoi(port)
+
+	recs := []Record{
+		{Domain: "alive.local", IP: "127.0.0.1", Port: portN},
+		{Domain: "dead.local", IP: "127.0.0.1", Port: 1}, // nothing listens on tcp/1
+	}
+	got := probeRecords(recs, 800*time.Millisecond, 8, func(string, ...any) {})
+	if len(got) != 1 || got[0].Domain != "alive.local" {
+		t.Fatalf("probe kept wrong records: %+v", got)
+	}
+}
+
+// TestFetchRecordsDropsClosedPorts is the regression test for the stale
+// app_watches incident: a catalog watch pointing at a dead port must not be
+// published, while a live discovery-found port on the same guest survives.
+func TestFetchRecordsDropsClosedPorts(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, livePort, _ := net.SplitHostPort(ln.Addr().String())
+	livePortN, _ := strconv.Atoi(livePort)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/vms", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"vmid":5,"name":"repurposed","status":"running","type":"lxc","ips":["127.0.0.1"],
+			 "app_watches":[{"name":"StaleApp","ports":[{"port":1}]}]}
+		]`))
+	})
+	// discovery finds the actually-listening service
+	mux.HandleFunc("/api/vms/5/apps/docker-discovery", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","candidates":[{"container_name":"RealApp","default_ports":[` + livePort + `]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// probe runs against 127.0.0.1 so the "live" discovery port is really
+	// open and the stale catalog port (tcp/1) is really closed
+	cfg := Config{BaseURL: srv.URL, Network: "127.0.0.0/8", Probe: true}
+	recs, err := NewClient(cfg).fetchRecords(cfg, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("fetchRecords: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Domain != "realapp.local" || recs[0].Port != livePortN {
+		t.Fatalf("dead watch port must be dropped, live one kept: %+v", recs)
+	}
+
+	// probe disabled: nothing is dropped
+	cfg2 := Config{BaseURL: srv.URL, Network: "127.0.0.0/8", Probe: false}
+	recs2, err := NewClient(cfg2).fetchRecords(cfg2, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("fetchRecords: %v", err)
+	}
+	if len(recs2) != 2 {
+		t.Fatalf("probe=false must keep both records: %+v", recs2)
+	}
+}
+
 func TestParseBridgeSubnet(t *testing.T) {
 	out := "1: lo    inet 127.0.0.1/8 scope host lo\\\n    valid_lft forever\n2: vmbr0    inet 10.4.2.99/24 scope global vmbr0\n"
 	sub := parseBridgeSubnet(out)
@@ -150,7 +265,11 @@ func TestFetchRecords(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	cfg := Config{BaseURL: srv.URL, Token: "tok", Network: "10.4.2.0/24"}
+	// probe-off: exercises filtering (running + lxc + subnet preference),
+	// dedup, slug/name fallback and bearer auth deterministically. Out of
+	// subnet 192.168.7.7 now survives picking via the fallback (probe would
+	// prune it if unreachable — covered in TestFetchRecordsProbePrunes).
+	cfg := Config{BaseURL: srv.URL, Token: "tok", Network: "10.4.2.0/24", Probe: false}
 	c := NewClient(cfg)
 	recs, err := c.fetchRecords(cfg, func(string, ...any) {})
 	if err != nil {
@@ -167,6 +286,7 @@ func TestFetchRecords(t *testing.T) {
 	want := map[key]bool{
 		{"sonarr.local", "10.4.2.150", 8989}:   true,
 		{"prowlarr.local", "10.4.2.150", 9696}: true,
+		{"out.local", "192.168.7.7", 8080}:     true,
 	}
 	if len(recs) != len(want) {
 		t.Fatalf("want %d records, got %d: %+v", len(want), len(recs), recs)
@@ -187,6 +307,46 @@ func TestFetchRecords(t *testing.T) {
 		if r.Domain == "prowlarr.local" && r.Service != "prowlarr" {
 			t.Errorf("empty watch name should fall back to slug: %+v", r)
 		}
+	}
+}
+
+// TestFetchRecordsProbePrunes: with probing on, the stale catalog port
+// (tcp/1, always refused) is dropped while the actually-listening discovery
+// port survives — on the same guest, deterministically via loopback.
+func TestFetchRecordsProbePrunes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, livePort, _ := net.SplitHostPort(ln.Addr().String())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/vms", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"vmid":5,"name":"guest","status":"running","type":"lxc","ips":["127.0.0.1"],
+			 "app_watches":[{"name":"App","ports":[{"port":1},{"port":` + livePort + `}]}]}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := Config{BaseURL: srv.URL, Network: "127.0.0.0/8", Probe: true}
+	recs, err := NewClient(cfg).fetchRecords(cfg, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("fetchRecords: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Domain != "app.local" || recs[0].Port != ln.Addr().(*net.TCPAddr).Port {
+		t.Fatalf("only the live port must survive: %+v", recs)
 	}
 }
 

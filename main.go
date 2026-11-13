@@ -62,6 +62,7 @@ type Config struct {
 	HTTP       bool // serve plain http:// alongside https:// (no redirect)
 	Static     bool // static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied)
 	ForceHTTPS bool // portal always generates https:// links, regardless of access protocol
+	Probe      bool // TCP-probe each candidate port; drop records whose port is closed
 	Scan       bool
 	APIAddr    string
 	LogFile    string
@@ -78,6 +79,7 @@ func defaultConfig() Config {
 		HTTP:       true,
 		Static:     true,
 		ForceHTTPS: false,
+		Probe:      true,
 		APIAddr:    defaultAPIAddr,
 		LogFile:    defaultLogFile,
 	}
@@ -182,7 +184,7 @@ func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
 	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fLog string
-	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fStatic, fForceHTTPS bool
+	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fStatic, fForceHTTPS, fProbe bool
 	fs := flag.NewFlagSet("proxdnx", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
 	fs.StringVar(&fURL, "url", "", "ProxMenux monitor base URL (env PROXMENUX_URL)")
@@ -198,6 +200,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.BoolVar(&fHTTP, "http", false, "serve plain http:// alongside https:// (default: config/http, on)")
 	fs.BoolVar(&fStatic, "static", false, "static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied, no port in the URL) (default: config/static, on)")
 	fs.BoolVar(&fForceHTTPS, "force-https", false, "portal always generates https:// links regardless of access protocol (default: config/force_https, off)")
+	fs.BoolVar(&fProbe, "probe", false, "tcp-probe each candidate port and drop closed ones (default: config/probe, on)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
@@ -251,6 +254,8 @@ func loadEffectiveConfig() (Config, error) {
 			c.Static = fStatic
 		case "force-https":
 			c.ForceHTTPS = fForceHTTPS
+		case "probe":
+			c.Probe = fProbe
 		case "avahi":
 			c.Avahi = fAvahi
 		case "scan":
@@ -467,8 +472,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS)
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe)
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

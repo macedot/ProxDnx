@@ -60,6 +60,7 @@ func TestLoadConfig(t *testing.T) {
 		"http: false",
 		"static: false",
 		"force_https: true",
+		"probe: true",
 		"scan: true",
 		"api_addr: 127.0.0.1:1234",
 		"log_file: /tmp/x.log",
@@ -79,7 +80,7 @@ func TestLoadConfig(t *testing.T) {
 	if c.Interval != 90*time.Second {
 		t.Errorf("interval: got %v", c.Interval)
 	}
-	if c.Caddy || !c.Avahi || c.HTTP || c.Static || !c.ForceHTTPS || !c.Scan {
+	if c.Caddy || !c.Avahi || c.HTTP || c.Static || !c.ForceHTTPS || !c.Probe || !c.Scan {
 		t.Errorf("bools not merged: %+v", c)
 	}
 	if c.APIAddr != "127.0.0.1:1234" || c.LogFile != "/tmp/x.log" {
@@ -102,7 +103,7 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 	want := Config{
 		BaseURL: "http://10.0.0.9:8008", Token: "tok", User: "u", Password: "p@ss #x",
 		TOTP: "123", Bridge: "vmbr9", Network: "10.0.0.0/24", Interval: 90 * time.Second,
-		Caddy: true, Avahi: false, HTTP: false, Static: false, ForceHTTPS: true, Scan: true,
+		Caddy: true, Avahi: false, HTTP: false, Static: false, ForceHTTPS: true, Probe: true, Scan: true,
 		APIAddr: "127.0.0.1:1234", LogFile: "/tmp/log",
 	}
 	if err := saveConfig(path, &want); err != nil {

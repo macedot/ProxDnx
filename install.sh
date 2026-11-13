@@ -246,6 +246,7 @@ avahi: true
 http: true
 static: true
 force_https: false
+probe: true
 scan: false
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log
