@@ -258,6 +258,7 @@ force_https: false
 probe: true
 autofix: false
 scan: false
+api_token: ""
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log
 EOF

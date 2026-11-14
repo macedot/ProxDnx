@@ -35,11 +35,23 @@ func newTestApp(domains []Record) *App {
 
 func get(t *testing.T, h http.Handler, path string) (*http.Response, string) {
 	t.Helper()
+	return getReq(t, h, mustReq(t, path))
+}
+
+// getReq serves h once and issues req against it (URL retargeted to the
+// httptest server, headers preserved).
+func getReq(t *testing.T, h http.Handler, req *http.Request) (*http.Response, string) {
+	t.Helper()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + path)
+	out, err := http.NewRequest(req.Method, srv.URL+req.URL.RequestURI(), nil)
 	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
+		t.Fatal(err)
+	}
+	out.Header = req.Header.Clone()
+	resp, err := http.DefaultClient.Do(out)
+	if err != nil {
+		t.Fatalf("%s %s: %v", req.Method, req.URL, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -207,6 +219,57 @@ func TestLoopbackHost(t *testing.T) {
 			t.Errorf("loopbackHost(%q) = %v, want %v", in, got, want)
 		}
 	}
+}
+
+func TestRequireToken(t *testing.T) {
+	// no token configured: everything open
+	app := newTestApp(nil)
+	h := app.routes()
+	for _, path := range []string{"/", "/api/domains", "/healthz"} {
+		if resp, _ := get(t, h, path); resp.StatusCode != 200 {
+			t.Errorf("open mode: GET %s = %d, want 200", path, resp.StatusCode)
+		}
+	}
+
+	// token configured: every route but /healthz demands the token
+	app.cfg.APIToken = "s3cret"
+	h = app.routes()
+	if resp, _ := get(t, h, "/api/domains"); resp.StatusCode != 401 {
+		t.Errorf("missing token: %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := get(t, h, "/"); resp.StatusCode != 401 {
+		t.Errorf("portal without token: %d, want 401", resp.StatusCode)
+	}
+	if resp, _ := get(t, h, "/healthz"); resp.StatusCode != 200 {
+		t.Errorf("healthz must stay open for healthchecks: %d", resp.StatusCode)
+	}
+	if resp, _ := get(t, h, "/api/domains?token=wrong"); resp.StatusCode != 401 {
+		t.Errorf("wrong token: %d, want 401", resp.StatusCode)
+	}
+	for name, req := range map[string]*http.Request{
+		"query":     mustReq(t, "/api/domains?token=s3cret"),
+		"bearer":    withHeader(mustReq(t, "/api/domains"), "Authorization", "Bearer s3cret"),
+		"apiheader": withHeader(mustReq(t, "/api/domains"), "X-API-Token", "s3cret"),
+	} {
+		resp, _ := getReq(t, h, req)
+		if resp.StatusCode != 200 {
+			t.Errorf("%s token: %d, want 200", name, resp.StatusCode)
+		}
+	}
+}
+
+func mustReq(t *testing.T, path string) *http.Request {
+	t.Helper()
+	r, err := http.NewRequest(http.MethodGet, "http://api"+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func withHeader(r *http.Request, k, v string) *http.Request {
+	r.Header.Set(k, v)
+	return r
 }
 
 func TestSecureHeaders(t *testing.T) {

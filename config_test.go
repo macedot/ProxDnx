@@ -125,17 +125,52 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 }
 
 func TestApplyEnv(t *testing.T) {
-	t.Setenv("PROXMENUX_URL", "http://env:8008")
-	t.Setenv("PROXMENUX_TOKEN", "envtok")
+	t.Setenv("PROXMENUX_URL", "http://legacy:8008")
+	t.Setenv("PROXMENUX_TOKEN", "legactok")
 	t.Setenv("PROXMENUX_USER", "envuser")
 	t.Setenv("PROXMENUX_PASS", "envpass")
 	t.Setenv("PROXMENUX_TOTP", "000000")
 	t.Setenv("PROXDNX_NETWORK", "10.9.9.0/24")
 	c := defaultConfig()
-	applyEnv(&c)
-	if c.BaseURL != "http://env:8008" || c.Token != "envtok" || c.User != "envuser" ||
+	if err := applyEnv(&c); err != nil {
+		t.Fatalf("applyEnv: %v", err)
+	}
+	if c.BaseURL != "http://legacy:8008" || c.Token != "legactok" || c.User != "envuser" ||
 		c.Password != "envpass" || c.TOTP != "000000" || c.Network != "10.9.9.0/24" {
 		t.Errorf("env not applied: %+v", c)
+	}
+
+	// full PROXDNX_* scheme (compose-friendly): overrides legacy aliases
+	t.Setenv("PROXDNX_URL", "http://new:8008")
+	t.Setenv("PROXDNX_TOKEN", "newtok")
+	t.Setenv("PROXDNX_PASSWORD", "newpass")
+	t.Setenv("PROXDNX_INTERVAL", "90s")
+	t.Setenv("PROXDNX_PROBE", "false")
+	t.Setenv("PROXDNX_AUTOFIX", "true")
+	t.Setenv("PROXDNX_API_TOKEN", "webtok")
+	t.Setenv("PROXDNX_API_ADDR", "0.0.0.0:9973")
+	t.Setenv("PROXDNX_BRIDGE", "vmbr9")
+	c = defaultConfig()
+	if err := applyEnv(&c); err != nil {
+		t.Fatalf("applyEnv: %v", err)
+	}
+	if c.BaseURL != "http://new:8008" || c.Token != "newtok" || c.Password != "newpass" ||
+		c.Interval != 90*time.Second || c.Probe || !c.AutoFix ||
+		c.APIToken != "webtok" || c.APIAddr != "0.0.0.0:9973" || c.Bridge != "vmbr9" {
+		t.Errorf("PROXDNX_* env not applied: %+v", c)
+	}
+
+	// malformed values fail loudly instead of being ignored
+	t.Setenv("PROXDNX_INTERVAL", "notaduration")
+	c = defaultConfig()
+	if err := applyEnv(&c); err == nil || !strings.Contains(err.Error(), "PROXDNX_INTERVAL") {
+		t.Errorf("bad interval env must fail with the var name: %v", err)
+	}
+	t.Setenv("PROXDNX_INTERVAL", "60s")
+	t.Setenv("PROXDNX_PROBE", "maybe")
+	c = defaultConfig()
+	if err := applyEnv(&c); err == nil || !strings.Contains(err.Error(), "PROXDNX_PROBE") {
+		t.Errorf("bad bool env must fail with the var name: %v", err)
 	}
 }
 

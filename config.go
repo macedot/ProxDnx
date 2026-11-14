@@ -123,6 +123,8 @@ func loadConfig(path string, c *Config) (bool, error) {
 			}
 		case "api_addr":
 			c.APIAddr = v
+		case "api_token":
+			c.APIToken = v
 		case "log_file":
 			c.LogFile = v
 		default:
@@ -156,6 +158,7 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "probe: %s\n", strconv.FormatBool(c.Probe))
 	fmt.Fprintf(&b, "autofix: %s\n", strconv.FormatBool(c.AutoFix))
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
+	fmt.Fprintf(&b, "api_token: %s\n", yamlValue(c.APIToken))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
 	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
@@ -178,24 +181,78 @@ func saveConfig(path string, c *Config) error {
 	return os.Rename(tmp, path)
 }
 
-// applyEnv overlays PROXMENUX_* / PROXDNX_* environment variables.
-func applyEnv(c *Config) {
-	if v := os.Getenv("PROXMENUX_URL"); v != "" {
-		c.BaseURL = v
+// applyEnv overlays environment variables onto the config so a deployment
+// can be fully driven without a config file (docker compose et al):
+// PROXDNX_URL, PROXDNX_TOKEN, PROXDNX_USER, PROXDNX_PASSWORD, PROXDNX_TOTP,
+// PROXDNX_BRIDGE, PROXDNX_NETWORK, PROXDNX_INTERVAL, PROXDNX_CADDY,
+// PROXDNX_AVAHI, PROXDNX_HTTP, PROXDNX_STATIC, PROXDNX_FORCE_HTTPS,
+// PROXDNX_PROBE, PROXDNX_AUTOFIX, PROXDNX_SCAN, PROXDNX_API_ADDR,
+// PROXDNX_API_TOKEN, PROXDNX_LOG_FILE. The legacy PROXMENUX_* names stay as
+// aliases (URL/TOKEN/USER/PASS/TOTP); PROXDNX_* wins when both are set.
+// Malformed values fail startup instead of being silently ignored.
+func applyEnv(c *Config) error {
+	str := func(f func(*Config, string)) func(*Config, string) error {
+		return func(c *Config, v string) error { f(c, v); return nil }
 	}
-	if v := os.Getenv("PROXMENUX_TOKEN"); v != "" {
-		c.Token = v
+	b := func(f func(*Config, bool)) func(*Config, string) error {
+		return func(c *Config, v string) error {
+			parsed, err := strconv.ParseBool(v)
+			if err != nil {
+				return fmt.Errorf("bad bool %q", v)
+			}
+			f(c, parsed)
+			return nil
+		}
 	}
-	if v := os.Getenv("PROXMENUX_USER"); v != "" {
-		c.User = v
+	bindings := []struct {
+		key string
+		set func(*Config, string) error
+	}{
+		{"PROXDNX_URL", str(func(c *Config, v string) { c.BaseURL = v })},
+		{"PROXDNX_TOKEN", str(func(c *Config, v string) { c.Token = v })},
+		{"PROXDNX_USER", str(func(c *Config, v string) { c.User = v })},
+		{"PROXDNX_PASSWORD", str(func(c *Config, v string) { c.Password = v })},
+		{"PROXDNX_TOTP", str(func(c *Config, v string) { c.TOTP = v })},
+		{"PROXDNX_BRIDGE", str(func(c *Config, v string) { c.Bridge = v })},
+		{"PROXDNX_NETWORK", str(func(c *Config, v string) { c.Network = v })},
+		{"PROXDNX_INTERVAL", func(c *Config, v string) error {
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("bad duration %q", v)
+			}
+			c.Interval = d
+			return nil
+		}},
+		{"PROXDNX_CADDY", b(func(c *Config, v bool) { c.Caddy = v })},
+		{"PROXDNX_AVAHI", b(func(c *Config, v bool) { c.Avahi = v })},
+		{"PROXDNX_HTTP", b(func(c *Config, v bool) { c.HTTP = v })},
+		{"PROXDNX_STATIC", b(func(c *Config, v bool) { c.Static = v })},
+		{"PROXDNX_FORCE_HTTPS", b(func(c *Config, v bool) { c.ForceHTTPS = v })},
+		{"PROXDNX_PROBE", b(func(c *Config, v bool) { c.Probe = v })},
+		{"PROXDNX_AUTOFIX", b(func(c *Config, v bool) { c.AutoFix = v })},
+		{"PROXDNX_SCAN", b(func(c *Config, v bool) { c.Scan = v })},
+		{"PROXDNX_API_ADDR", str(func(c *Config, v string) { c.APIAddr = v })},
+		{"PROXDNX_API_TOKEN", str(func(c *Config, v string) { c.APIToken = v })},
+		{"PROXDNX_LOG_FILE", str(func(c *Config, v string) { c.LogFile = v })},
 	}
-	if v := os.Getenv("PROXMENUX_PASS"); v != "" {
-		c.Password = v
+	// legacy aliases first: the PROXDNX_* bindings below override on conflict
+	for k, set := range map[string]func(string){
+		"PROXMENUX_URL":   func(v string) { c.BaseURL = v },
+		"PROXMENUX_TOKEN": func(v string) { c.Token = v },
+		"PROXMENUX_USER":  func(v string) { c.User = v },
+		"PROXMENUX_PASS":  func(v string) { c.Password = v },
+		"PROXMENUX_TOTP":  func(v string) { c.TOTP = v },
+	} {
+		if v := os.Getenv(k); v != "" {
+			set(v)
+		}
 	}
-	if v := os.Getenv("PROXMENUX_TOTP"); v != "" {
-		c.TOTP = v
+	for _, bd := range bindings {
+		if v := os.Getenv(bd.key); v != "" {
+			if err := bd.set(c, v); err != nil {
+				return fmt.Errorf("%s: %v", bd.key, err)
+			}
+		}
 	}
-	if v := os.Getenv("PROXDNX_NETWORK"); v != "" {
-		c.Network = v
-	}
+	return nil
 }

@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -66,6 +67,7 @@ type Config struct {
 	Probe      bool // TCP-probe each candidate port; drop records whose port is closed
 	AutoFix    bool // correct stale/mismatched ProxMenux registrations via its API
 	Scan       bool
+	APIToken   string // require this token on API/portal requests ("" = open)
 	APIAddr    string
 	LogFile    string
 	Path       string // resolved config file path
@@ -192,7 +194,7 @@ func (c Config) validate() error {
 func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
-	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fLog string
+	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fAPIToken, fLog string
 	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fStatic, fForceHTTPS, fProbe, fAutoFix bool
 	fs := flag.NewFlagSet("proxdnx", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
@@ -213,6 +215,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.BoolVar(&fAutoFix, "autofix", false, "correct stale/mismatched ProxMenux registrations via its API (default: config/autofix, off; requires probe)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
+	fs.StringVar(&fAPIToken, "api-token", "", "require this token on API/portal requests: Authorization: Bearer, X-API-Token header or ?token= (env PROXDNX_API_TOKEN)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
 	fs.BoolVar(&fOnce, "once", false, "run a single cycle and exit")
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -228,7 +231,9 @@ func loadEffectiveConfig() (Config, error) {
 	if err != nil {
 		return c, fmt.Errorf("%s: %v", path, err)
 	}
-	applyEnv(&c)
+	if err := applyEnv(&c); err != nil {
+		return c, err
+	}
 
 	once := fOnce
 	fs.Visit(func(f *flag.Flag) {
@@ -274,6 +279,8 @@ func loadEffectiveConfig() (Config, error) {
 			c.Scan = fScan
 		case "api-addr":
 			c.APIAddr = fAPI
+		case "api-token":
+			c.APIToken = fAPIToken
 		case "log-file":
 			c.LogFile = fLog
 		}
@@ -312,6 +319,34 @@ func secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// requireToken enforces the optional api_token. Accepted: Authorization:
+// Bearer, X-API-Token header, or ?token= query parameter (so the portal can
+// be bookmarked as apps.<host>.local/?token=...). /healthz stays open for
+// monitoring and container healthchecks. Compare is constant-time; an empty
+// configured token disables auth entirely (loopback deployments).
+func (a *App) requireToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.APIToken != "" && r.URL.Path != "/healthz" {
+			tok := r.URL.Query().Get("token")
+			if tok == "" {
+				if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+					tok = strings.TrimPrefix(h, "Bearer ")
+				}
+			}
+			if tok == "" {
+				tok = r.Header.Get("X-API-Token")
+			}
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) != 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, `{"error":"unauthorized: present api_token via Authorization: Bearer, X-API-Token or ?token="}`)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // routes builds the API handler tree. Separated from serveAPI so tests can
 // exercise it with httptest without binding a socket.
 func (a *App) routes() http.Handler {
@@ -340,6 +375,7 @@ func (a *App) routes() http.Handler {
 			"avahi":            a.cfg.Avahi,
 			"static":           a.cfg.Static,
 			"force_https":      a.cfg.ForceHTTPS,
+			"auth":             a.cfg.APIToken != "",
 			"config":           a.cfg.Path,
 			"last_cycle":       a.stats,
 		})
@@ -359,7 +395,10 @@ func (a *App) routes() http.Handler {
 		_, _ = io.WriteString(w, "ok")
 	})
 	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /healthz)", a.cfg.APIAddr)
-	return secureHeaders(mux)
+	if a.cfg.APIToken != "" {
+		a.log.Printf("api: token auth ENABLED (healthz exempt)")
+	}
+	return secureHeaders(a.requireToken(mux))
 }
 
 // serveAPI runs the API server with explicit timeouts — a bare
@@ -491,8 +530,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix)
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v api_auth=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.APIToken != "")
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

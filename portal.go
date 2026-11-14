@@ -64,10 +64,13 @@ const portalHTMLRaw = `<!doctype html>
 <script>
 function esc(s){const d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
 const FORCE_HTTPS=__FORCE_HTTPS__;
+const TOKEN=new URLSearchParams(location.search).get("token")||"";
+function api(p){return TOKEN?p+"?token="+encodeURIComponent(TOKEN):p}
+if(TOKEN){document.querySelectorAll("footer a").forEach(a=>{a.href=a.getAttribute("href")+"?token="+encodeURIComponent(TOKEN)})}
 function proto(){return FORCE_HTTPS?"https:":location.protocol}
 async function load(){
   try{
-    const d=await (await fetch("/api/domains")).json();
+    const d=await (await fetch(api("/api/domains"))).json();
     const g=document.getElementById("grid");
     g.innerHTML="";
     (d.domains||[]).forEach(x=>{
@@ -87,7 +90,7 @@ async function load(){
 }
 async function loadStatic(){
   try{
-    const s=await (await fetch("/api/static")).json();
+    const s=await (await fetch(api("/api/static"))).json();
     const sec=document.getElementById("static");
     if(!s.enabled){sec.hidden=true;return}
     const g=document.getElementById("staticgrid");
