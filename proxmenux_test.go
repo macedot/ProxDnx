@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -595,5 +597,105 @@ func TestDoLimitsBody(t *testing.T) {
 	}
 	if len(b) > 8<<20 {
 		t.Errorf("body not capped: %d bytes", len(b))
+	}
+}
+
+// TestIdentifyTitleBlocksInternalRedirect: a guest answering its identity
+// probe with a 302 must not be able to aim the daemon at the PVE host's own
+// loopback pages (monitor API, pveproxy) — httptest binds loopback, so any
+// redirect target in this test IS a loopback address and must be refused.
+func TestIdentifyTitleBlocksInternalRedirect(t *testing.T) {
+	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html><title>SecretInternal</title></html>"))
+	}))
+	defer inner.Close()
+	outer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, inner.URL+"/admin", http.StatusFound)
+	}))
+	defer outer.Close()
+
+	if got := identifyTitle(strings.TrimPrefix(outer.URL, "http://")); got != "" {
+		t.Errorf("redirect to loopback must be blocked, got title %q", got)
+	}
+	// sanity: a plain fetch (no redirect) still extracts the title
+	if got := identifyTitle(strings.TrimPrefix(inner.URL, "http://")); got != "SecretInternal" {
+		t.Errorf("plain title fetch broken: %q", got)
+	}
+}
+
+func TestRefuseInternalRedirect(t *testing.T) {
+	mustURL := func(s string) *url.URL {
+		u, err := url.Parse(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	allowed := []string{
+		"http://10.4.2.150:8989/",       // LAN guest (normal redirect within the guest)
+		"https://sonarr.example/login/", // hostname: cannot be judged safely, allowed
+	}
+	blocked := []string{
+		"http://127.0.0.1:8008/api/vms",            // monitor API on the host itself
+		"http://127.0.0.1:8006/",                   // pveproxy
+		"http://[::1]/",                            // IPv6 loopback
+		"http://0.0.0.0/",                          // unspecified
+		"http://169.254.169.254/latest/meta-data/", // cloud metadata
+		"ftp://10.4.2.5/x",                         // non-http scheme
+	}
+	for _, s := range allowed {
+		if err := refuseInternalRedirect(mustURL(s)); err != nil {
+			t.Errorf("%s must be allowed: %v", s, err)
+		}
+	}
+	for _, s := range blocked {
+		if err := refuseInternalRedirect(mustURL(s)); err == nil {
+			t.Errorf("%s must be blocked", s)
+		}
+	}
+}
+
+// TestAuthorizedReLogin: the monitor invalidates sessions on restart — a
+// 401 against a login-issued token must transparently re-login once and
+// succeed; a config-provided (static) token must NOT loop.
+func TestAuthorizedReLogin(t *testing.T) {
+	logins := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		logins++
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"success":true,"token":"T%d"}`, logins)))
+	})
+	mux.HandleFunc("/api/vms", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer T1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"session expired"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"vmid":1,"name":"app","status":"running","type":"lxc","ips":["127.0.0.1"],"app_watches":[{"name":"App","ports":[{"port":8080}]}]}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := NewClient(Config{BaseURL: srv.URL, User: "u", Password: "p"})
+	var guests []Guest
+	if err := c.getJSON("/api/vms", &guests, 5*time.Second); err != nil {
+		t.Fatalf("stale token must self-heal via re-login: %v", err)
+	}
+	if logins != 2 {
+		t.Errorf("logins = %d, want 2 (initial + re-login)", logins)
+	}
+	if len(guests) != 1 {
+		t.Errorf("guests = %d, want 1", len(guests))
+	}
+
+	// static token: a 401 surfaces instead of retrying forever
+	c2 := NewClient(Config{BaseURL: srv.URL, Token: "T1"})
+	var again []Guest
+	err := c2.getJSON("/api/vms", &again, 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Errorf("static-token 401 must surface: %v", err)
+	}
+	if logins != 2 {
+		t.Errorf("static token must not trigger logins: %d", logins)
 	}
 }

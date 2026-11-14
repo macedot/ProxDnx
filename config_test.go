@@ -172,6 +172,8 @@ func TestValidate(t *testing.T) {
 		{"bridge too long", func(c *Config) { c.Bridge = "abcdefghijklmnopqrst" }},
 		{"network bad cidr", func(c *Config) { c.Network = "10.0.0.0/99" }},
 		{"api_addr no port", func(c *Config) { c.APIAddr = "127.0.0.1" }},
+		{"interval zero", func(c *Config) { c.Interval = 0 }},
+		{"interval negative", func(c *Config) { c.Interval = -5 * time.Second }},
 	}
 	for _, tc := range cases {
 		c := defaultConfig()

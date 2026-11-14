@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -70,6 +71,7 @@ type Config struct {
 	Path       string // resolved config file path
 
 	created bool // config file was bootstrapped this run
+	once    bool // -once: run a single cycle and exit
 }
 
 func defaultConfig() Config {
@@ -179,6 +181,11 @@ func (c Config) validate() error {
 	if _, _, err := net.SplitHostPort(c.APIAddr); err != nil {
 		return fmt.Errorf("api_addr: %v", err)
 	}
+	// time.NewTicker panics on non-positive intervals: a config typo like
+	// "interval: 0s" must refuse startup, not crash-loop under systemd.
+	if c.Interval <= 0 {
+		return fmt.Errorf("interval: must be positive (got %s)", c.Interval)
+	}
 	return nil
 }
 
@@ -271,7 +278,7 @@ func loadEffectiveConfig() (Config, error) {
 			c.LogFile = fLog
 		}
 	})
-	_ = once
+	c.once = once
 
 	if err := c.validate(); err != nil {
 		return c, err
@@ -291,11 +298,16 @@ func loadEffectiveConfig() (Config, error) {
 
 // secureHeaders wraps every API/portal response: the API serves untrusted-ish
 // JSON and an HTML dashboard on a LAN port, so forbid MIME sniffing and any
-// caching of domain inventories.
+// caching of domain inventories, and pin the dashboard down (no framing, no
+// external content).
 func secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Cache-Control", "no-store")
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -433,13 +445,13 @@ func (a *App) cycle(ctx context.Context) error {
 	}
 
 	stats := CycleStats{
-		At: start, Kept: len(kept), Added: len(added),
-		Removed: len(removed), Changed: len(changed), Total: len(cur),
+		At: start, Kept: len(kept), Added: len(added), Removed: len(removed),
+		Changed: len(changed), Total: len(cur),
 		DurationMS: time.Since(start).Milliseconds(),
 	}
-	sortStrings(added)
-	sortStrings(removed)
-	sortStrings(changed)
+	sort.Strings(added)
+	sort.Strings(removed)
+	sort.Strings(changed)
 	for _, d := range added {
 		a.log.Printf("added %s -> %s:%d (%s)", d, cur[d].IP, cur[d].Port, cur[d].Service)
 	}
@@ -460,14 +472,6 @@ func (a *App) cycle(ctx context.Context) error {
 	return nil
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
-}
-
 func (a *App) setStats(s CycleStats) {
 	a.mu.Lock()
 	a.stats = s
@@ -481,6 +485,9 @@ func main() {
 		os.Exit(2)
 	}
 	logger := setupLogging(cfg.LogFile)
+	if host, _, splitErr := net.SplitHostPort(cfg.APIAddr); splitErr == nil && !loopbackHost(host) {
+		logger.Printf("warning: api binds %s — the API is UNAUTHENTICATED (domain inventory, config path); loopback-only is the safe default", cfg.APIAddr)
+	}
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
@@ -513,7 +520,7 @@ func main() {
 	if err := app.cycle(ctx); err != nil {
 		logger.Printf("initial cycle failed: %v", err)
 	}
-	if once := hasOnceFlag(); once {
+	if cfg.once {
 		return
 	}
 
@@ -535,16 +542,17 @@ func main() {
 	}
 }
 
-func hasOnceFlag() bool {
-	for _, a := range os.Args[1:] {
-		if a == "-once" || a == "--once" {
-			return true
-		}
-	}
-	return false
-}
-
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "proxdnx: "+format+"\n", args...)
 	os.Exit(2)
+}
+
+// loopbackHost reports whether the API bind host is loopback-only. Empty
+// host = wildcard bind (all interfaces) — not loopback.
+func loopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -139,6 +139,13 @@ done
 
 [ "$(id -u)" -eq 0 ] || { msg_error "This script must be run as root."; exit 1; }
 
+# Release tags feed a download URL: refuse anything that is not a plain tag
+# (path traversal, option injection via a leading dash, whitespace).
+case "$VERSION" in
+    latest|-y|--yes) ;;
+    *[!A-Za-z0-9._-]*|-*|.*) msg_error "invalid VERSION: $VERSION"; exit 1 ;;
+esac
+
 echo -e "${CUS}${BOLD}"
 echo "    ____                ____             "
 echo "   |  _ \ _ __ _____  _|  _ \ _ __ __  __"
@@ -230,7 +237,9 @@ msg_ok "directories ready"
 
 if [ ! -f "$CONF" ]; then
     msg_info "Bootstrapping config at $CONF..."
-    cat > "$CONF" <<'EOF'
+    # umask 077 while writing: the config will hold the monitor token and
+    # password — it must never be world-readable, not even briefly.
+    ( umask 077; cat > "$CONF" <<'EOF'
 # proxdnx configuration (flat YAML subset; read + rewritten by proxdnx)
 # precedence: CLI flags > environment (PROXMENUX_*) > this file > built-in defaults
 url: http://127.0.0.1:8008
@@ -252,6 +261,7 @@ scan: false
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log
 EOF
+    )
     chmod 600 "$CONF"
     msg_ok "config created (edit to taste; restart proxdnx to apply)"
 else

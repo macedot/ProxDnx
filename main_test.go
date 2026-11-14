@@ -193,30 +193,43 @@ func TestRoutesMethodAnd404(t *testing.T) {
 	}
 }
 
-func TestHasOnceFlag(t *testing.T) {
-	old := os.Args
-	defer func() { os.Args = old }()
-	os.Args = []string{"proxdnx", "--once"}
-	if !hasOnceFlag() {
-		t.Error("--once not detected")
+func TestLoopbackHost(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1": true,
+		"::1":       true,
+		"":          false, // wildcard bind
+		"0.0.0.0":   false,
+		"10.4.2.5":  false,
+		"junk":      false,
 	}
-	os.Args = []string{"proxdnx", "-once"}
-	if !hasOnceFlag() {
-		t.Error("-once not detected")
-	}
-	os.Args = []string{"proxdnx", "--other"}
-	if hasOnceFlag() {
-		t.Error("false positive once flag")
+	for in, want := range cases {
+		if got := loopbackHost(in); got != want {
+			t.Errorf("loopbackHost(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
-func TestSortStrings(t *testing.T) {
-	s := []string{"c", "a", "b", "a"}
-	sortStrings(s)
-	if strings.Join(s, ",") != "a,a,b,c" {
-		t.Errorf("sortStrings: %v", s)
+func TestSecureHeaders(t *testing.T) {
+	app := newTestApp(nil)
+	srv := httptest.NewServer(app.routes())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
 	}
-	sortStrings(nil) // must not panic
+	defer resp.Body.Close()
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("missing nosniff")
+	}
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Error("missing no-store")
+	}
+	if resp.Header.Get("X-Frame-Options") != "DENY" {
+		t.Error("missing frame-deny")
+	}
+	if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Error("missing CSP")
+	}
 }
 
 func TestSetStats(t *testing.T) {

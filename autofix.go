@@ -18,11 +18,8 @@ package main
 // heal, repeated attempts would just churn ProxMenux.
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -245,31 +242,10 @@ func (c *Client) applyFix(logf func(string, ...any), r Record, plan fixPlan) boo
 
 // putJSON issues an authorized JSON PUT against the monitor API.
 func (c *Client) putJSON(path string, payload any) error {
-	if err := c.ensureToken(); err != nil {
-		return err
-	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PUT", c.base+path, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	resp, err := c.http.Do(req.WithContext(ctx))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, trunc(string(body), 200))
-	}
-	return nil
+	_, err = c.authorized(http.MethodPut, path, b, 10*time.Second)
+	return err
 }

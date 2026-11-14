@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -24,8 +26,9 @@ type Client struct {
 	totp  string
 	http  *http.Client
 
-	fixMu       sync.Mutex
-	fixAttempts map[fixKey]int // autofix attempts per registration (cap 2)
+	tokenFromLogin bool // token came from ensureToken's login (re-issuable)
+	fixMu          sync.Mutex
+	fixAttempts    map[fixKey]int // autofix attempts per registration (cap 2)
 }
 
 func NewClient(cfg Config) *Client {
@@ -145,6 +148,7 @@ func (c *Client) ensureToken() error {
 	_ = json.Unmarshal(b, &out)
 	if resp.StatusCode == 200 && out.Success && out.Token != "" {
 		c.token = out.Token
+		c.tokenFromLogin = true
 		return nil
 	}
 	if out.RequiresTOTP {
@@ -154,20 +158,62 @@ func (c *Client) ensureToken() error {
 }
 
 func (c *Client) getJSON(path string, out any, timeout time.Duration) error {
-	if err := c.ensureToken(); err != nil {
-		return err
-	}
-	b, code, err := c.do("GET", path, timeout)
+	b, err := c.authorized("GET", path, nil, timeout)
 	if err != nil {
 		return err
-	}
-	if code != 200 {
-		return fmt.Errorf("%s: HTTP %d: %s", path, code, trunc(string(b), 200))
 	}
 	if err := json.Unmarshal(b, out); err != nil {
 		return fmt.Errorf("%s: %v", path, err)
 	}
 	return nil
+}
+
+// authorized issues an authorized request, re-authenticating once when a
+// login-issued token is rejected (the monitor invalidates sessions on
+// restart — without the retry every cycle fails until the daemon restarts).
+// Config-provided tokens are static: no point retrying those.
+func (c *Client) authorized(method, path string, body []byte, timeout time.Duration) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		if err := c.ensureToken(); err != nil {
+			return nil, err
+		}
+		b, code, err := c.doBody(method, path, body, timeout)
+		if err != nil {
+			return nil, err
+		}
+		if code != 401 || attempt > 0 || !c.tokenFromLogin {
+			if code >= 300 {
+				return nil, fmt.Errorf("%s: HTTP %d: %s", path, code, trunc(string(b), 200))
+			}
+			return b, nil
+		}
+		// stale session: drop the token, re-login, retry once
+		c.token = ""
+	}
+}
+
+func (c *Client) doBody(method, path string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	req, err := http.NewRequest(method, c.base+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	resp, err := c.http.Do(req.WithContext(ctx))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return b, resp.StatusCode, nil
 }
 
 // fetchRecords returns the deduplicated, domain-keyed records for all running
@@ -310,7 +356,38 @@ var titleRe = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)`)
 
 // identityClient is shared by the identity probes; total timeout includes
 // redirects. Purely informational: failures yield no title, never errors.
-var identityClient = &http.Client{Timeout: identityTimeout}
+// Redirects are bounded (3) and may not target loopback/unspecified/
+// link-local addresses: those pages belong to the PVE host itself (monitor
+// API, pveproxy), and a rogue LAN guest must not be able to make the daemon
+// fetch them by answering its identity probe with a 302 (SSRF).
+var identityClient = &http.Client{
+	Timeout: identityTimeout,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		return refuseInternalRedirect(req.URL)
+	},
+}
+
+// refuseInternalRedirect rejects redirect targets that address the daemon's
+// own host (loopback, unspecified, link-local — includes cloud metadata
+// 169.254.169.254). Non-IP hosts pass: identity fetches dial IP literals;
+// a hostname redirect only risks fetching a public page, not internal ones.
+func refuseInternalRedirect(u *url.URL) error {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("redirect to non-http scheme %q blocked", u.Scheme)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("redirect to internal address %s blocked", ip)
+	}
+	return nil
+}
 
 // identifyTitle fetches the service's UI page title over plain HTTP.
 func identifyTitle(addr string) string {

@@ -158,10 +158,23 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
 		return err
 	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	// pid-unique O_EXCL temp + rename: this file holds the monitor token and
+	// password — a symlink planted at the predictable legacy name must never
+	// be followed (same hardening as writeIfChanged).
 	return os.Rename(tmp, path)
 }
 
