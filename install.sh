@@ -6,8 +6,8 @@
 # Author       : macedot
 # Repository   : https://github.com/macedot/ProxDnx
 # License      : AGPL-3.0 (https://www.gnu.org/licenses/agpl-3.0)
-# Version      : 1.0
-# Last Updated : 10/11/2026
+# Version      : 1.1
+# Last Updated : 14/11/2026
 # ==========================================================
 # Description:
 # This script installs and configures ProxDnx, a daemon that
@@ -35,6 +35,9 @@
 #   the daemon refuses to start otherwise (systemd Requires=).
 # - Re-running this script performs an in-place upgrade
 #   (service is restarted, config is never overwritten).
+# - Every config key can also be supplied via PROXDNX_* environment
+#   variables (docker/systemd-friendly — see README); setting api_token
+#   protects the API/portal with token auth (healthz stays open).
 #
 # Usage:
 #   install.sh [-y] [VERSION]        install/upgrade (default: latest release)
@@ -258,6 +261,8 @@ force_https: false
 probe: true
 autofix: false
 scan: false
+# api_token: empty = auto-generated on first start (stored here + logged);
+# "none" = open API. Protects the portal/API; healthz always open.
 api_token: ""
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log

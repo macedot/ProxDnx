@@ -13,7 +13,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -195,7 +197,7 @@ func loadEffectiveConfig() (Config, error) {
 	c := defaultConfig()
 
 	var fConfig, fURL, fToken, fUser, fPass, fTOTP, fBridge, fNetwork, fInterval, fAPI, fAPIToken, fLog string
-	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fStatic, fForceHTTPS, fProbe, fAutoFix bool
+	var fCaddy, fAvahi, fHTTP, fScan, fOnce, fVersion, fStatic, fForceHTTPS, fProbe, fAutoFix bool
 	fs := flag.NewFlagSet("proxdnx", flag.ContinueOnError)
 	fs.StringVar(&fConfig, "config", "", "config file path (default ~/.config/proxdnx/config.yaml)")
 	fs.StringVar(&fURL, "url", "", "ProxMenux monitor base URL (env PROXMENUX_URL)")
@@ -218,8 +220,13 @@ func loadEffectiveConfig() (Config, error) {
 	fs.StringVar(&fAPIToken, "api-token", "", "require this token on API/portal requests: Authorization: Bearer, X-API-Token header or ?token= (env PROXDNX_API_TOKEN)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
 	fs.BoolVar(&fOnce, "once", false, "run a single cycle and exit")
+	fs.BoolVar(&fVersion, "version", false, "print version and exit")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return c, err
+	}
+	if fVersion {
+		fmt.Println("proxdnx " + version)
+		os.Exit(0)
 	}
 
 	path, err := configPath(fConfig)
@@ -337,6 +344,13 @@ func (a *App) requireToken(next http.Handler) http.Handler {
 				tok = r.Header.Get("X-API-Token")
 			}
 			if subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) != 1 {
+				if r.URL.Path == "/" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+					// browser: serve the token form instead of raw JSON
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.WriteHeader(http.StatusUnauthorized)
+					_, _ = io.WriteString(w, authFormHTML)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = io.WriteString(w, `{"error":"unauthorized: present api_token via Authorization: Bearer, X-API-Token or ?token="}`)
@@ -376,6 +390,7 @@ func (a *App) routes() http.Handler {
 			"static":           a.cfg.Static,
 			"force_https":      a.cfg.ForceHTTPS,
 			"auth":             a.cfg.APIToken != "",
+			"version":          version,
 			"config":           a.cfg.Path,
 			"last_cycle":       a.stats,
 		})
@@ -517,6 +532,51 @@ func (a *App) setStats(s CycleStats) {
 	a.mu.Unlock()
 }
 
+// version is the release identifier baked in at build time:
+//
+//	go build -ldflags "-X main.version=v0.2.1" .
+//
+// Source builds show "dev". Surfaced on the portal footer, /api/status and
+// the -version flag.
+var version = "dev"
+
+// apiTokenOff explicitly disables API auth; an empty api_token means
+// "generate one on first start" (see ensureAPIToken).
+const apiTokenOff = "none"
+
+// generateToken returns a 256-bit URL-safe random token.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// ensureAPIToken resolves the effective API token. Like the Proxmox UI, the
+// dashboard/API is authenticated BY DEFAULT: an empty api_token generates a
+// random token on first start and persists it to the config file so it
+// survives restarts; `none` opts out (open API, loopback deployments).
+func ensureAPIToken(cfg *Config, logf func(string, ...any)) {
+	switch cfg.APIToken {
+	case apiTokenOff:
+		cfg.APIToken = ""
+		logf("api: auth disabled (api_token: none) — the API/portal is OPEN")
+	case "":
+		tok, err := generateToken()
+		if err != nil {
+			logf("api: token generation failed (%v) — continuing WITHOUT auth; set api_token explicitly", err)
+			return
+		}
+		cfg.APIToken = tok
+		if err := saveConfig(cfg.Path, cfg); err != nil {
+			logf("api: generated api_token (in-memory only — could not write %s: %v): %s", cfg.Path, err, tok)
+			return
+		}
+		logf("api: no api_token configured — generated one and stored it in %s: %s", cfg.Path, tok)
+	}
+}
+
 func main() {
 	cfg, err := loadEffectiveConfig()
 	if err != nil {
@@ -524,8 +584,13 @@ func main() {
 		os.Exit(2)
 	}
 	logger := setupLogging(cfg.LogFile)
+	ensureAPIToken(&cfg, logger.Printf)
 	if host, _, splitErr := net.SplitHostPort(cfg.APIAddr); splitErr == nil && !loopbackHost(host) {
-		logger.Printf("warning: api binds %s — the API is UNAUTHENTICATED (domain inventory, config path); loopback-only is the safe default", cfg.APIAddr)
+		if cfg.APIToken != "" {
+			logger.Printf("api binds %s — token auth is enabled", cfg.APIAddr)
+		} else {
+			logger.Printf("warning: api binds %s UNAUTHENTICATED — set api_token in the config", cfg.APIAddr)
+		}
 	}
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)

@@ -1,0 +1,76 @@
+# ProxDnx configuration — every key with its default and what it does.
+# This file is annotated documentation; the daemon bootstraps a minimal
+# ~/.config/proxdnx/config.yaml on first install and never overwrites it.
+#
+# Precedence: CLI flags > PROXDNX_* env > PROXMENUX_* env (legacy aliases:
+# url/token/user/pass/totp) > this file > built-in defaults.
+# Every key also exists as a PROXDNX_* environment variable
+# (see README "Environment variables") — a config file is optional.
+
+# ProxMenux Monitor API (this daemon's data source).
+url: http://127.0.0.1:8008
+
+# Optional ProxMenux auth. Leave empty when the monitor has auth disabled;
+# or set a Bearer token, or user/password (login is done for you, with
+# automatic re-login when the monitor restarts and invalidates the session).
+token: ""
+user: ""
+password: ""
+totp: ""
+
+# Host bridge whose subnet guest IPs are matched against; or pin an
+# explicit CIDR (e.g. 10.4.2.0/24) and leave bridge as-is.
+bridge: vmbr0
+network: ""
+
+# Cycle interval. Must be positive; smaller than 30s buys little.
+interval: 60s
+
+# Writers. `caddy` renders + validates + reloads /etc/caddy/Caddyfile;
+# `avahi` writes the mDNS service files and the *.local A-record aliases.
+# Both must run on the PVE host — inside a container keep both false.
+caddy: true
+avahi: true
+
+# Serve plain http://name.local on :80 alongside https (no redirect).
+http: true
+
+# Static infrastructure entries, proxied exactly like apps (no port in the
+# URL): <host>.local -> Proxmox UI (:8006), menux*.local -> the configured
+# monitor URL. Also listed in a separate section on the portal.
+static: true
+
+# Portal links always generated as https:// regardless of how the dashboard
+# itself was opened.
+force_https: false
+
+# TCP-probe every candidate port each cycle and fetch each app's UI title:
+# dead ports are tagged "stale" (kept visible on the portal, excluded from
+# caddy/avahi), titles that disagree with the registered name are tagged
+# "mismatch" (amber badge, still published).
+probe: true
+
+# Self-healing (requires probe, off by default): when a registration is
+# stale or mismatched, sweep well-known app ports on the guest, identify the
+# real app by its UI title and correct the ProxMenux registration through
+# the monitor's own API. Renames demote the registration to link-only.
+# Ambiguous evidence is never guessed; max 2 attempts per registration.
+autofix: false
+
+# Force fresh docker/native discovery scans (POST instead of cached GET)
+# each cycle. Slower cycles; only useful when wiring up new guests.
+scan: false
+
+# Optional API/portal auth — ON by default: when empty, a random token is
+# generated on first start, stored in this file and printed to the startup
+# log; every portal/API request then requires it (Authorization: Bearer,
+# X-API-Token or ?token=; /healthz stays open). Set "none" to run an open
+# API (loopback deployments).
+api_token: ""
+
+# API listen address. 127.0.0.1 is the safe default; a non-loopback bind
+# logs a loud warning (the API has no auth unless api_token is set).
+api_addr: 127.0.0.1:9973
+
+# Log file (mirrored to stdout/journald).
+log_file: /var/log/proxdnx/proxdnx.log

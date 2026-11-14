@@ -25,7 +25,7 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
         run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o proxdnx .
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o proxdnx .
           tar -czf proxdnx-linux-${{ matrix.arch }}.tar.gz proxdnx
           # hash next to the file we just created — no cross-job glob guessing
           sha256sum proxdnx-linux-${{ matrix.arch }}.tar.gz > checksums-${{ matrix.arch }}.txt
