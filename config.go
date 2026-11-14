@@ -98,7 +98,7 @@ func loadConfig(path string, c *Config) (bool, error) {
 				return true, fmt.Errorf("%s: bad duration %q: %v", k, v, err)
 			}
 			c.Interval = d
-		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe":
+		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return true, fmt.Errorf("%s: bad bool %q: %v", k, v, err)
@@ -116,6 +116,8 @@ func loadConfig(path string, c *Config) (bool, error) {
 				c.ForceHTTPS = b
 			case "probe":
 				c.Probe = b
+			case "autofix":
+				c.AutoFix = b
 			default:
 				c.Scan = b
 			}
@@ -152,6 +154,7 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "static: %s\n", strconv.FormatBool(c.Static))
 	fmt.Fprintf(&b, "force_https: %s\n", strconv.FormatBool(c.ForceHTTPS))
 	fmt.Fprintf(&b, "probe: %s\n", strconv.FormatBool(c.Probe))
+	fmt.Fprintf(&b, "autofix: %s\n", strconv.FormatBool(c.AutoFix))
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))

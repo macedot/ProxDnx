@@ -177,12 +177,29 @@ func TestIdentityMismatch(t *testing.T) {
 		{"Plex", "Unauthorized", false},                   // generic title
 		{"FlareSolverr", "FastAPI - Swagger UI", false},   // generic title
 		{"Bazarr", "Sonarr", true},                        // the incident
+		{"Bazarr", "Login - Sonarr", true},                // incident, auth page
 		{"Kept", "", false},                               // no title: no verdict
 		{"", "Something", false},                          // no service: no verdict
 	}
 	for _, tc := range cases {
 		if got := identityMismatch(tc.service, tc.title); got != tc.want {
 			t.Errorf("identityMismatch(%q, %q) = %v, want %v", tc.service, tc.title, got, tc.want)
+		}
+	}
+}
+
+func TestTitleIdentity(t *testing.T) {
+	cases := map[string]string{
+		"Login - Sonarr":       "Sonarr",
+		"Login - Radarr":       "Radarr",
+		"Bazarr":               "Bazarr",
+		"Unauthorized":         "",
+		"FastAPI - Swagger UI": "", // API-doc page: no identity
+		"reclip admin — login": "reclip admin —",
+	}
+	for in, want := range cases {
+		if got := titleIdentity(in); got != want {
+			t.Errorf("titleIdentity(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

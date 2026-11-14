@@ -23,16 +23,20 @@ type Client struct {
 	pass  string
 	totp  string
 	http  *http.Client
+
+	fixMu       sync.Mutex
+	fixAttempts map[fixKey]int // autofix attempts per registration (cap 2)
 }
 
 func NewClient(cfg Config) *Client {
 	return &Client{
-		base:  strings.TrimRight(cfg.BaseURL, "/"),
-		token: cfg.Token,
-		user:  cfg.User,
-		pass:  cfg.Password,
-		totp:  cfg.TOTP,
-		http:  &http.Client{Timeout: 150 * time.Second},
+		base:        strings.TrimRight(cfg.BaseURL, "/"),
+		token:       cfg.Token,
+		user:        cfg.User,
+		pass:        cfg.Password,
+		totp:        cfg.TOTP,
+		http:        &http.Client{Timeout: 150 * time.Second},
+		fixAttempts: map[fixKey]int{},
 	}
 }
 
@@ -46,6 +50,9 @@ type Record struct {
 	Stale    bool   `json:"stale,omitempty"`    // TCP probe failed: port closed
 	Title    string `json:"title,omitempty"`    // detected UI page title ("" unknown)
 	Mismatch bool   `json:"mismatch,omitempty"` // detected UI title disagrees with Service
+
+	vmid  int    `json:"-"` // ProxMenux sidecar identity for autofix (internal)
+	appID string `json:"-"`
 }
 
 type Guest struct {
@@ -59,6 +66,7 @@ type Guest struct {
 }
 
 type AppWatch struct {
+	ID    string `json:"id"` // sidecar app id — autofix PUTs corrections here
 	Name  string `json:"name"`
 	Slug  string `json:"helper_slug"`
 	Ports []struct {
@@ -208,18 +216,32 @@ func (c *Client) fetchRecords(cfg Config, notef func(string, ...any)) ([]Record,
 			if svc == "" {
 				svc = g.Name
 			}
+			appID := ""
+			if e.source == "app_watch" && len(g.AppWatches) > 0 {
+				for _, w := range g.AppWatches {
+					if w.Name == e.name || (w.Name == "" && w.Slug == e.name) {
+						appID = w.ID
+						break
+					}
+				}
+			}
 			recs = append(recs, Record{
 				Domain:  slugify(svc) + ".local",
 				Service: svc,
 				Name:    g.Name,
 				IP:      ip,
 				Port:    e.port,
+				vmid:    g.VMID,
+				appID:   appID,
 			})
 		}
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Domain < recs[j].Domain })
 	if cfg.Probe {
 		recs = probeRecords(recs, probeTimeout, probeWorkers, notef)
+	}
+	if cfg.AutoFix {
+		c.autoFix(notef, recs)
 	}
 	return recs, nil
 }
@@ -256,7 +278,7 @@ func probeRecords(recs []Record, timeout time.Duration, workers int, logf func(s
 				return
 			}
 			c.Close()
-			title := identifyTitle(addr)
+			title := titleIdentity(identifyTitle(addr))
 			results <- result{idx: idx, title: title}
 		}(i, net.JoinHostPort(r.IP, strconv.Itoa(r.Port)), r.Service)
 	}
@@ -312,9 +334,52 @@ func identifyTitle(addr string) string {
 	return t
 }
 
-// genericTitles carry no identity: they are what any auth-gated or
-// generated UI answers with, so they can never confirm or contradict a name.
-var genericTitles = []string{"login", "unauthorized", "sign in", "signin", "forbidden", "swagger", "welcome"}
+// authTitleWords appear on auth-gated pages whose title still names the app
+// ("Login - Sonarr"); noIdentityTitleWords are API-doc pages that name a
+// different product entirely ("FastAPI - Swagger UI") and carry no identity.
+var authTitleWords = []string{"login", "unauthorized", "forbidden", "sign in", "signin", "welcome"}
+var noIdentityTitleWords = []string{"swagger"}
+
+// titleIdentity strips auth-page words from a UI title ("Login - Sonarr" ->
+// "Sonarr"); returns "" when the title carries no app identity at all
+// (auth-only pages, API-doc pages).
+func titleIdentity(title string) string {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return ""
+	}
+	tl := strings.ToLower(t)
+	if containsAny(tl, noIdentityTitleWords) {
+		return ""
+	}
+	if !containsAny(tl, authTitleWords) {
+		return t
+	}
+	var keep []string
+	for _, f := range strings.Fields(t) {
+		fl := strings.ToLower(strings.Trim(f, "-:|·"))
+		if fl == "" || containsAny(fl, authTitleWords) {
+			continue
+		}
+		keep = append(keep, f)
+	}
+	return strings.Join(keep, " ")
+}
+
+func containsAny(s string, words []string) bool {
+	for _, w := range words {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// titleHasIdentity reports whether a UI title can confirm or contradict a
+// registered name at all.
+func titleHasIdentity(title string) bool {
+	return titleIdentity(title) != ""
+}
 
 // identityMismatch reports a disagreement between the registered service name
 // and the UI title the endpoint actually serves. Slug containment (either
@@ -326,11 +391,8 @@ func identityMismatch(service, title string) bool {
 	if service == "" || title == "" {
 		return false
 	}
-	tl := strings.ToLower(title)
-	for _, g := range genericTitles {
-		if strings.Contains(tl, g) {
-			return false
-		}
+	if !titleHasIdentity(title) {
+		return false
 	}
 	s, t := slugify(service), slugify(title)
 	if s == "" || t == "" {
