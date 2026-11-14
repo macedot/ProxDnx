@@ -575,6 +575,10 @@ func TestPortalHTML(t *testing.T) {
 	if strings.Contains(off, `href="https://'+`) {
 		t.Error("hardcoded https link generation still present")
 	}
+	// the URL may carry ?token= — cross-origin navigation must never carry it
+	if !strings.Contains(off, `<meta name="referrer" content="no-referrer">`) {
+		t.Error("portal must suppress the Referer header (token in URL)")
+	}
 }
 
 func TestRoutesPortalRendersFlag(t *testing.T) {

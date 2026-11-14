@@ -24,6 +24,8 @@ func portalHTML(force bool) string {
 const authFormHTML = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- no-referrer: the portal URL may carry ?token=; never leak it to app origins -->
+<meta name="referrer" content="no-referrer">
 <title>ProxDnx · access token</title>
 <style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#14161a;color:#e8e8ea;font:15px/1.5 system-ui,sans-serif}
@@ -50,6 +52,8 @@ const portalHTMLRaw = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- no-referrer: the portal URL may carry ?token=; never leak it to app origins -->
+<meta name="referrer" content="no-referrer">
 <title>ProxDnx · published services</title>
 <style>
   :root{--bg:#14161a;--card:#1e2126;--border:#2a2e34;--text:#e8e8ea;--muted:#9aa0a6;--accent:#E64804;--link:#6cb2ff}
