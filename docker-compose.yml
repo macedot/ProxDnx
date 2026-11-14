@@ -1,0 +1,29 @@
+# ProxDnx in a container: serves the API/portal only. Caddy/avahi management
+# is a host feature, so both writers stay off and the whole config is driven
+# by PROXDNX_* environment variables — no config file needed.
+#
+#   docker compose up -d          # from the repo root
+#
+# Portal/API:  http://<container-ip>:9973/api/domains   (Bearer: change-me)
+# Health:      http://<container-ip>:9973/healthz       (always open)
+services:
+  proxdnx:
+    build: .                       # Dockerfile in this repo
+    image: proxdnx:local
+    restart: unless-stopped
+    environment:
+      # ProxMenux Monitor API (reachable from the container network)
+      PROXDNX_URL: "http://192.168.1.10:8008"
+      # Monitor auth (optional — only when the monitor requires it)
+      # PROXDNX_TOKEN: "..."
+      # API: bind all interfaces + require a token (non-loopback => use one!)
+      PROXDNX_API_ADDR: "0.0.0.0:9973"
+      PROXDNX_API_TOKEN: "change-me"
+      # caddy/avahi management is a host feature — keep both off in containers
+      PROXDNX_CADDY: "false"
+      PROXDNX_AVAHI: "false"
+      PROXDNX_PROBE: "true"
+      # PROXDNX_AUTOFIX: "false"
+      # PROXDNX_INTERVAL: "60s"
+    ports:
+      - "9973:9973"
