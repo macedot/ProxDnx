@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"sort"
@@ -73,22 +72,31 @@ func isManagedAdguardDomain(domain, suffix string) bool {
 	return suffix != "" && strings.HasSuffix(domain, "."+suffix)
 }
 
+// AdguardSync is the outcome of one rewrite-sync pass.
+type AdguardSync struct {
+	Names   int
+	Added   []string
+	Updated []string
+	Removed []string
+}
+
 // applyAdguard makes AdGuard Home agree with the published name set: adds
 // missing rewrites, fixes rewrites whose answer drifted, and (when pruning is
 // enabled) removes managed rewrites that are no longer published. User-owned
 // rewrites — any entry not pointing at the host IP — are never modified.
-func applyAdguard(logger *log.Logger, publish []Record, answer string, cfg Config) error {
+// Logging lives with the caller (the cycle); this stays side-effect free.
+func applyAdguard(publish []Record, answer string, cfg Config) (AdguardSync, error) {
+	var s AdguardSync
 	if cfg.AdguardURL == "" {
-		return nil
+		return s, nil
 	}
 	if cfg.AdguardUser == "" || cfg.AdguardPassword == "" {
-		logger.Printf("adguard: url set but user/password missing — sync skipped")
-		return nil
+		return s, fmt.Errorf("adguard_user/adguard_password missing")
 	}
 	base := strings.TrimRight(cfg.AdguardURL, "/")
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return err
+		return s, err
 	}
 	client := &http.Client{
 		Timeout: 15 * time.Second,
@@ -99,11 +107,11 @@ func applyAdguard(logger *log.Logger, publish []Record, answer string, cfg Confi
 		},
 	}
 	if err := adguardLogin(client, base, cfg.AdguardUser, cfg.AdguardPassword); err != nil {
-		return err
+		return s, err
 	}
 	existing, err := adguardListRewrites(client, base)
 	if err != nil {
-		return err
+		return s, err
 	}
 
 	names := adguardNames(dedupeSites(publish), cfg)
@@ -113,24 +121,23 @@ func applyAdguard(logger *log.Logger, publish []Record, answer string, cfg Confi
 		byDomain[r.Domain] = r
 	}
 
-	var added, updated, removed []string
 	for _, d := range names {
 		want[d] = true
 		if cur, ok := byDomain[d]; ok {
 			if cur.Answer != answer || !cur.Enabled {
 				if err := adguardDo(client, http.MethodPut, base+"/control/rewrite/update",
 					map[string]adguardRewrite{"target": cur, "update": {Domain: d, Answer: answer, Enabled: true}}); err != nil {
-					return fmt.Errorf("update %s: %v", d, err)
+					return s, fmt.Errorf("update %s: %v", d, err)
 				}
-				updated = append(updated, d)
+				s.Updated = append(s.Updated, d)
 			}
 			continue
 		}
 		if err := adguardDo(client, http.MethodPost, base+"/control/rewrite/add",
 			adguardRewrite{Domain: d, Answer: answer, Enabled: true}); err != nil {
-			return fmt.Errorf("add %s: %v", d, err)
+			return s, fmt.Errorf("add %s: %v", d, err)
 		}
-		added = append(added, d)
+		s.Added = append(s.Added, d)
 	}
 	if cfg.AdguardPrune {
 		for d, r := range byDomain {
@@ -138,14 +145,13 @@ func applyAdguard(logger *log.Logger, publish []Record, answer string, cfg Confi
 				continue
 			}
 			if err := adguardDo(client, http.MethodDelete, base+"/control/rewrite/delete", r); err != nil {
-				return fmt.Errorf("delete %s: %v", d, err)
+				return s, fmt.Errorf("delete %s: %v", d, err)
 			}
-			removed = append(removed, d)
+			s.Removed = append(s.Removed, d)
 		}
 	}
-	logger.Printf("adguard: synced %d names (added %d, updated %d, removed %d)",
-		len(names), len(added), len(updated), len(removed))
-	return nil
+	s.Names = len(names)
+	return s, nil
 }
 
 func adguardLogin(client *http.Client, base, user, password string) error {

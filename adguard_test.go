@@ -3,13 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeAdguard is a minimal AdGuard Home: login-gated rewrite store.
@@ -114,10 +113,6 @@ func newFakeAdguard(t *testing.T, user, pass string) (*fakeAdguard, *httptest.Se
 	return f, srv
 }
 
-func discardLogger() *log.Logger {
-	return log.New(io.Discard, "", 0)
-}
-
 func testPublish() []Record {
 	return []Record{
 		{Service: "Sonarr", Domain: "sonarr", IP: "10.4.2.150", Port: 8989},
@@ -138,7 +133,7 @@ func TestAdguardSyncAddsPublishedNames(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", Static: true, AdguardPrune: true}
 	answer := "10.4.2.99"
-	if err := applyAdguard(discardLogger(), testPublish(), answer, cfg); err != nil {
+	if _, err := applyAdguard(testPublish(), answer, cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	host := hostLabel()
@@ -161,7 +156,7 @@ func TestAdguardSyncAddsPublishedNames(t *testing.T) {
 func TestAdguardSyncSuffixVariants(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home"}
-	if err := applyAdguard(discardLogger(), testPublish(), "10.4.2.99", cfg); err != nil {
+	if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	for _, d := range []string{"sonarr.home", "immich.home", "apps." + hostLabel() + ".home"} {
@@ -175,7 +170,7 @@ func TestAdguardSyncIdempotent(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", Static: true, AdguardPrune: true}
 	for i := 0; i < 2; i++ {
-		if err := applyAdguard(discardLogger(), testPublish(), "10.4.2.99", cfg); err != nil {
+		if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 			t.Fatalf("sync %d: %v", i, err)
 		}
 	}
@@ -192,7 +187,7 @@ func TestAdguardSyncFixesDriftedAnswer(t *testing.T) {
 	f.rewrites["sonarr.local"] = adguardRewrite{Domain: "sonarr.local", Answer: "1.2.3.4", Enabled: true}
 	f.order = append(f.order, "sonarr.local")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: true}
-	if err := applyAdguard(discardLogger(), testPublish(), "10.4.2.99", cfg); err != nil {
+	if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if r := f.rewrites["sonarr.local"]; r.Answer != "10.4.2.99" {
@@ -211,7 +206,7 @@ func TestAdguardSyncPrunesOnlyManaged(t *testing.T) {
 	f.rewrites["user-app.local"] = adguardRewrite{Domain: "user-app.local", Answer: "10.9.9.9", Enabled: true}
 	f.order = []string{"removed-app.local", "user-app.local"}
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: true}
-	if err := applyAdguard(discardLogger(), testPublish(), answer, cfg); err != nil {
+	if _, err := applyAdguard(testPublish(), answer, cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if _, ok := f.rewrites["removed-app.local"]; ok {
@@ -230,7 +225,7 @@ func TestAdguardSyncPruneDisabled(t *testing.T) {
 	f.rewrites["removed-app.local"] = adguardRewrite{Domain: "removed-app.local", Answer: "10.4.2.99", Enabled: true}
 	f.order = append(f.order, "removed-app.local")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: false}
-	if err := applyAdguard(discardLogger(), testPublish(), "10.4.2.99", cfg); err != nil {
+	if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if _, ok := f.rewrites["removed-app.local"]; !ok {
@@ -241,11 +236,72 @@ func TestAdguardSyncPruneDisabled(t *testing.T) {
 func TestAdguardBadCredentials(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
 	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "wrong"}
-	err := applyAdguard(discardLogger(), testPublish(), "10.4.2.99", cfg)
+	_, err := applyAdguard(testPublish(), "10.4.2.99", cfg)
 	if err == nil || !strings.Contains(err.Error(), "bad credentials") {
 		t.Fatalf("expected bad-credentials error, got %v", err)
 	}
 	if len(f.rewrites) != 0 {
 		t.Fatalf("failed login must not touch rewrites")
+	}
+}
+
+func TestAPIAdguardDisabled(t *testing.T) {
+	resp, body := get(t, newTestApp(nil).routes(), "/api/adguard")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("body: %v (%s)", err, body)
+	}
+	if v, _ := out["enabled"].(bool); v {
+		t.Fatalf("expected enabled=false, got %s", body)
+	}
+}
+
+func TestAPIAdguardEnabled(t *testing.T) {
+	app := newTestApp(testPublish())
+	app.cfg.AdguardURL = "http://127.0.0.1:1" // configured; the endpoint never dials AdGuard
+	app.cfg.AdguardUser = "u"
+	app.cfg.AdguardPassword = "p"
+	app.cfg.AdguardSuffix = "home"
+	app.cfg.Static = false // keep the expected name set deterministic
+	app.adguard = AdguardStatus{Enabled: true, Synced: 8, At: time.Unix(1700000000, 0)}
+	resp, body := get(t, app.routes(), "/api/adguard")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var out struct {
+		Enabled  bool `json:"enabled"`
+		Count    int  `json:"count"`
+		Rewrites []struct {
+			Domain string `json:"domain"`
+			Answer string `json:"answer"`
+		} `json:"rewrites"`
+		Suffix   string        `json:"suffix"`
+		LastSync AdguardStatus `json:"last_sync"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("body: %v (%s)", err, body)
+	}
+	if !out.Enabled || out.Count != 8 || len(out.Rewrites) != 8 {
+		t.Fatalf("enabled=%v count=%d rewrites=%d (%s)", out.Enabled, out.Count, len(out.Rewrites), body)
+	}
+	if out.Suffix != "home" || out.LastSync.Synced != 8 {
+		t.Fatalf("suffix=%q last_sync=%+v", out.Suffix, out.LastSync)
+	}
+	seen := map[string]bool{}
+	for _, r := range out.Rewrites {
+		seen[r.Domain] = true
+	}
+	host := hostLabel()
+	for _, d := range []string{
+		"sonarr.local", "immich.local",
+		"apps." + host + ".local", host + ".local",
+		"sonarr.home", "immich.home", "apps." + host + ".home", host + ".home",
+	} {
+		if !seen[d] {
+			t.Fatalf("missing rewrite %s (have %v)", d, body)
+		}
 	}
 }

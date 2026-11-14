@@ -118,6 +118,20 @@ type App struct {
 	mu      sync.Mutex
 	domains []Record
 	stats   CycleStats
+	adguard AdguardStatus
+}
+
+// AdguardStatus is the outcome of the latest AdGuard rewrite-sync pass; it is
+// served on /api/adguard and rendered as a status chip on the portal.
+type AdguardStatus struct {
+	Enabled bool      `json:"enabled"`
+	Synced  int       `json:"synced"`
+	Added   []string  `json:"added,omitempty"`
+	Updated []string  `json:"updated,omitempty"`
+	Removed []string  `json:"removed,omitempty"`
+	Skipped string    `json:"skipped,omitempty"` // why this pass did not run
+	Error   string    `json:"error,omitempty"`   // last failure, empty on success
+	At      time.Time `json:"at"`
 }
 
 // execCommand runs a command and returns combined output.
@@ -410,11 +424,41 @@ func (a *App) routes() http.Handler {
 			"routes":  staticRoutes(hostLabel(), cfg.BaseURL),
 		})
 	})
+	mux.HandleFunc("GET /api/adguard", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		st := a.adguard
+		domains := a.domains
+		cfg := a.cfg
+		a.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if cfg.AdguardURL == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": false})
+			return
+		}
+		// desired rewrite set: what the sync maintains, with live answers
+		answer := hostIP(cfg.Bridge)
+		type rewrite struct {
+			Domain string `json:"domain"`
+			Answer string `json:"answer"`
+		}
+		names := adguardNames(dedupeSites(domains), cfg)
+		rewrites := make([]rewrite, 0, len(names))
+		for _, n := range names {
+			rewrites = append(rewrites, rewrite{Domain: n, Answer: answer})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled":   true,
+			"count":     len(rewrites),
+			"rewrites":  rewrites,
+			"suffix":    strings.Trim(strings.TrimRight(cfg.AdguardSuffix, "."), "."),
+			"last_sync": st,
+		})
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
 	})
-	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /healthz)", a.cfg.APIAddr)
+	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/adguard, /healthz)", a.cfg.APIAddr)
 	if a.cfg.APIToken != "" {
 		a.log.Printf("api: token auth ENABLED (healthz exempt)")
 	}
@@ -503,11 +547,29 @@ func (a *App) cycle(ctx context.Context) error {
 		}
 	}
 	if a.cfg.AdguardURL != "" {
-		if answer := hostIP(a.cfg.Bridge); answer == "" {
-			a.log.Printf("adguard: no host IPv4 on %s — sync skipped", a.cfg.Bridge)
-		} else if err := applyAdguard(a.log, publish, answer, a.cfg); err != nil {
-			a.log.Printf("adguard: sync failed: %v", err)
+		st := AdguardStatus{Enabled: true, At: time.Now()}
+		answer := hostIP(a.cfg.Bridge)
+		switch {
+		case a.cfg.AdguardUser == "" || a.cfg.AdguardPassword == "":
+			st.Skipped = "user/password missing"
+			a.log.Printf("adguard: %s — sync skipped", st.Skipped)
+		case answer == "":
+			st.Skipped = "no host IPv4 on " + a.cfg.Bridge
+			a.log.Printf("adguard: %s — sync skipped", st.Skipped)
+		default:
+			s, err := applyAdguard(publish, answer, a.cfg)
+			st.Synced, st.Added, st.Updated, st.Removed = s.Names, s.Added, s.Updated, s.Removed
+			if err != nil {
+				st.Error = err.Error()
+				a.log.Printf("adguard: sync failed: %v", err)
+			} else {
+				a.log.Printf("adguard: synced %d names (added %d, updated %d, removed %d)",
+					st.Synced, len(st.Added), len(st.Updated), len(st.Removed))
+			}
 		}
+		a.mu.Lock()
+		a.adguard = st
+		a.mu.Unlock()
 	}
 
 	stats := CycleStats{

@@ -567,10 +567,10 @@ func TestPortalHTML(t *testing.T) {
 	if !strings.Contains(on, "const FORCE_HTTPS=true;") {
 		t.Error("force=true must bake true into the page")
 	}
-	// both app cards and infrastructure cards must derive the protocol from
-	// the page access, never hardcode it
-	if strings.Count(off, `href="'+proto()+'//`) != 2 {
-		t.Errorf("cards must use proto() for both sections: %d sites", strings.Count(off, `href="'+proto()+'//`))
+	// app cards, infrastructure cards and adguard rewrite cards must all
+	// derive the protocol from the page access, never hardcode it
+	if strings.Count(off, `href="'+proto()+'//`) != 3 {
+		t.Errorf("cards must use proto() for all three sections: %d sites", strings.Count(off, `href="'+proto()+'//`))
 	}
 	if strings.Contains(off, `href="https://'+`) {
 		t.Error("hardcoded https link generation still present")
