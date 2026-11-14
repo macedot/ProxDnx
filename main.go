@@ -53,26 +53,31 @@ const (
 )
 
 type Config struct {
-	BaseURL    string
-	Token      string
-	User       string
-	Password   string
-	TOTP       string
-	Bridge     string
-	Network    string
-	Interval   time.Duration
-	Caddy      bool
-	Avahi      bool
-	HTTP       bool // serve plain http:// alongside https:// (no redirect)
-	Static     bool // static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied)
-	ForceHTTPS bool // portal always generates https:// links, regardless of access protocol
-	Probe      bool // TCP-probe each candidate port; drop records whose port is closed
-	AutoFix    bool // correct stale/mismatched ProxMenux registrations via its API
-	Scan       bool
-	APIToken   string // require this token on API/portal requests ("" = open)
-	APIAddr    string
-	LogFile    string
-	Path       string // resolved config file path
+	BaseURL         string
+	Token           string
+	User            string
+	Password        string
+	TOTP            string
+	Bridge          string
+	Network         string
+	Interval        time.Duration
+	Caddy           bool
+	Avahi           bool
+	HTTP            bool // serve plain http:// alongside https:// (no redirect)
+	Static          bool // static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied)
+	ForceHTTPS      bool // portal always generates https:// links, regardless of access protocol
+	Probe           bool // TCP-probe each candidate port; drop records whose port is closed
+	AutoFix         bool // correct stale/mismatched ProxMenux registrations via its API
+	Scan            bool
+	APIToken        string // require this token on API/portal requests ("" = open)
+	APIAddr         string
+	AdguardURL      string // AdGuard Home base URL (http://host:3000); "" = rewrite sync off
+	AdguardUser     string // AdGuard Home user
+	AdguardPassword string // AdGuard Home password
+	AdguardSuffix   string // optional: additionally publish <name>.<suffix> rewrites
+	AdguardPrune    bool   // prune managed AdGuard rewrites that are no longer published
+	LogFile         string
+	Path            string // resolved config file path
 
 	created bool // config file was bootstrapped this run
 	once    bool // -once: run a single cycle and exit
@@ -497,6 +502,13 @@ func (a *App) cycle(ctx context.Context) error {
 			a.log.Printf("avahi: apply failed: %v", err)
 		}
 	}
+	if a.cfg.AdguardURL != "" {
+		if answer := hostIP(a.cfg.Bridge); answer == "" {
+			a.log.Printf("adguard: no host IPv4 on %s — sync skipped", a.cfg.Bridge)
+		} else if err := applyAdguard(a.log, publish, answer, a.cfg); err != nil {
+			a.log.Printf("adguard: sync failed: %v", err)
+		}
+	}
 
 	stats := CycleStats{
 		At: start, Kept: len(kept), Added: len(added), Removed: len(removed),
@@ -595,8 +607,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v api_auth=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.APIToken != "")
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v adguard=%v api_auth=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.AdguardURL != "", cfg.APIToken != "")
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

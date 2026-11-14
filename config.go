@@ -98,7 +98,7 @@ func loadConfig(path string, c *Config) (bool, error) {
 				return true, fmt.Errorf("%s: bad duration %q: %v", k, v, err)
 			}
 			c.Interval = d
-		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix":
+		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix", "adguard_prune":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return true, fmt.Errorf("%s: bad bool %q: %v", k, v, err)
@@ -118,6 +118,8 @@ func loadConfig(path string, c *Config) (bool, error) {
 				c.Probe = b
 			case "autofix":
 				c.AutoFix = b
+			case "adguard_prune":
+				c.AdguardPrune = b
 			default:
 				c.Scan = b
 			}
@@ -125,6 +127,14 @@ func loadConfig(path string, c *Config) (bool, error) {
 			c.APIAddr = v
 		case "api_token":
 			c.APIToken = v
+		case "adguard_url":
+			c.AdguardURL = v
+		case "adguard_user":
+			c.AdguardUser = v
+		case "adguard_password":
+			c.AdguardPassword = v
+		case "adguard_suffix":
+			c.AdguardSuffix = v
 		case "log_file":
 			c.LogFile = v
 		default:
@@ -160,6 +170,11 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
 	fmt.Fprintf(&b, "api_token: %s\n", yamlValue(c.APIToken))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
+	fmt.Fprintf(&b, "adguard_url: %s\n", yamlValue(c.AdguardURL))
+	fmt.Fprintf(&b, "adguard_user: %s\n", yamlValue(c.AdguardUser))
+	fmt.Fprintf(&b, "adguard_password: %s\n", yamlValue(c.AdguardPassword))
+	fmt.Fprintf(&b, "adguard_suffix: %s\n", yamlValue(c.AdguardSuffix))
+	fmt.Fprintf(&b, "adguard_prune: %s\n", strconv.FormatBool(c.AdguardPrune))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
 	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -233,6 +248,11 @@ func applyEnv(c *Config) error {
 		{"PROXDNX_SCAN", b(func(c *Config, v bool) { c.Scan = v })},
 		{"PROXDNX_API_ADDR", str(func(c *Config, v string) { c.APIAddr = v })},
 		{"PROXDNX_API_TOKEN", str(func(c *Config, v string) { c.APIToken = v })},
+		{"PROXDNX_ADGUARD_URL", str(func(c *Config, v string) { c.AdguardURL = v })},
+		{"PROXDNX_ADGUARD_USER", str(func(c *Config, v string) { c.AdguardUser = v })},
+		{"PROXDNX_ADGUARD_PASSWORD", str(func(c *Config, v string) { c.AdguardPassword = v })},
+		{"PROXDNX_ADGUARD_SUFFIX", str(func(c *Config, v string) { c.AdguardSuffix = v })},
+		{"PROXDNX_ADGUARD_PRUNE", b(func(c *Config, v bool) { c.AdguardPrune = v })},
 		{"PROXDNX_LOG_FILE", str(func(c *Config, v string) { c.LogFile = v })},
 	}
 	// legacy aliases first: the PROXDNX_* bindings below override on conflict
