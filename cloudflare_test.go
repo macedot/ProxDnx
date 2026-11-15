@@ -217,6 +217,13 @@ func TestCloudflareSyncIdempotent(t *testing.T) {
 	}
 }
 
+func testPublish() []Record {
+	return []Record{
+		{Service: "Sonarr", Domain: "sonarr", IP: "10.4.2.150", Port: 8989},
+		{Service: "Immich", Domain: "immich", IP: "10.4.2.119", Port: 2283},
+	}
+}
+
 func TestCloudflareSyncPruneConflictPreserve(t *testing.T) {
 	f := newFakeCF(t)
 	host := hostLabel()

@@ -209,14 +209,6 @@ func TestValidate(t *testing.T) {
 		{"api_addr no port", func(c *Config) { c.APIAddr = "127.0.0.1" }},
 		{"interval zero", func(c *Config) { c.Interval = 0 }},
 		{"interval negative", func(c *Config) { c.Interval = -5 * time.Second }},
-		{"adguard url without suffix", func(c *Config) {
-			c.AdguardURL = "http://10.4.2.2:3000"
-			c.AdguardSuffix = ""
-		}},
-		{"adguard bad url", func(c *Config) {
-			c.AdguardURL = "10.4.2.2"
-			c.AdguardSuffix = "home.lab"
-		}},
 		{"cloudflare token without zone", func(c *Config) { c.CloudflareToken = "tok" }},
 	}
 	for _, tc := range cases {
@@ -232,10 +224,6 @@ func TestValidate(t *testing.T) {
 	ok.Bridge = "vmbr0"
 	ok.APIAddr = "127.0.0.1:9973"
 	ok.ForceHTTPS = true
-	ok.AdguardURL = "http://10.4.2.2:3000"
-	ok.AdguardUser = "u"
-	ok.AdguardPassword = "p"
-	ok.AdguardSuffix = "home.lab"
 	ok.CloudflareToken = "tok"
 	ok.CloudflareZone = "example.com"
 	if err := ok.validate(); err != nil {

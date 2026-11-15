@@ -11,7 +11,8 @@ package main
 // menux*) are deliberately never published — making Proxmox or ProxMenux
 // reachable from the internet is not a default anyone should get silently.
 //
-// Ownership rules (same spirit as the AdGuard sync):
+// Ownership rules (same spirit as the old AdGuard sync, kept for the
+// Cloudflare provider):
 //   - DNS records we manage carry the comment "managed by ProxDnx". A record
 //     without the marker pointing at a different target is user-owned and is
 //     never modified — it is reported as a conflict instead.

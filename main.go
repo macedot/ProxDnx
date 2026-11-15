@@ -53,29 +53,24 @@ const (
 )
 
 type Config struct {
-	BaseURL         string
-	Token           string
-	User            string
-	Password        string
-	TOTP            string
-	Bridge          string
-	Network         string
-	Interval        time.Duration
-	Caddy           bool
-	Avahi           bool
-	HTTP            bool // serve plain http:// alongside https:// (no redirect)
-	Static          bool // static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied)
-	ForceHTTPS      bool // portal always generates https:// links, regardless of access protocol
-	Probe           bool // TCP-probe each candidate port; drop records whose port is closed
-	AutoFix         bool // correct stale/mismatched ProxMenux registrations via its API
-	Scan            bool
-	APIToken        string // require this token on API/portal requests ("" = open)
-	APIAddr         string
-	AdguardURL      string // AdGuard Home base URL (http://host:3000); "" = rewrite sync off
-	AdguardUser     string // AdGuard Home user
-	AdguardPassword string // AdGuard Home password
-	AdguardSuffix   string // optional: additionally publish <name>.<suffix> rewrites
-	AdguardPrune    bool   // prune managed AdGuard rewrites that are no longer published
+	BaseURL    string
+	Token      string
+	User       string
+	Password   string
+	TOTP       string
+	Bridge     string
+	Network    string
+	Interval   time.Duration
+	Caddy      bool
+	Avahi      bool
+	HTTP       bool // serve plain http:// alongside https:// (no redirect)
+	Static     bool // static infra entries: <host>.local -> Proxmox UI, menux*.local -> ProxMenux (proxied)
+	ForceHTTPS bool // portal always generates https:// links, regardless of access protocol
+	Probe      bool // TCP-probe each candidate port; drop records whose port is closed
+	AutoFix    bool // correct stale/mismatched ProxMenux registrations via its API
+	Scan       bool
+	APIToken   string // require this token on API/portal requests ("" = open)
+	APIAddr    string
 
 	CloudflareToken    string // Cloudflare API token; "" = tunnel sync off
 	CloudflareZone     string // public zone (e.g. example.com)
@@ -123,21 +118,7 @@ type App struct {
 	mu      sync.Mutex
 	domains []Record
 	stats   CycleStats
-	adguard AdguardStatus
 	cf      CloudflareStatus
-}
-
-// AdguardStatus is the outcome of the latest AdGuard rewrite-sync pass; it is
-// served on /api/adguard and rendered as a status chip on the portal.
-type AdguardStatus struct {
-	Enabled bool      `json:"enabled"`
-	Synced  int       `json:"synced"`
-	Added   []string  `json:"added,omitempty"`
-	Updated []string  `json:"updated,omitempty"`
-	Removed []string  `json:"removed,omitempty"`
-	Skipped string    `json:"skipped,omitempty"` // why this pass did not run
-	Error   string    `json:"error,omitempty"`   // last failure, empty on success
-	At      time.Time `json:"at"`
 }
 
 // execCommand runs a command and returns combined output.
@@ -215,16 +196,8 @@ func (c Config) validate() error {
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval: must be positive (got %s)", c.Interval)
 	}
-	// DNS providers (spec: non-local providers publish <name>.<domain>,
-	// so a domain is required when the provider is on).
-	if c.AdguardURL != "" && strings.Trim(strings.TrimRight(c.AdguardSuffix, "."), ".") == "" {
-		return fmt.Errorf("adguard_suffix: required when adguard_url is set (apps publish <name>.<suffix>)")
-	}
-	if c.AdguardURL != "" {
-		if u, err := url.Parse(c.AdguardURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("adguard_url: must be an http(s) URL with a host (got %q)", c.AdguardURL)
-		}
-	}
+	// Cloudflare tunnel sync publishes <name>.<zone>: a zone is required
+	// when the provider is on.
 	if c.CloudflareToken != "" && strings.Trim(strings.TrimRight(c.CloudflareZone, "."), ".") == "" {
 		return fmt.Errorf("cloudflare_zone: required when cloudflare_token is set (apps publish <name>.<zone>)")
 	}
@@ -443,36 +416,6 @@ func (a *App) routes() http.Handler {
 			"routes":  staticRoutes(hostLabel(), cfg.BaseURL),
 		})
 	})
-	mux.HandleFunc("GET /api/adguard", func(w http.ResponseWriter, r *http.Request) {
-		a.mu.Lock()
-		st := a.adguard
-		domains := a.domains
-		cfg := a.cfg
-		a.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if cfg.AdguardURL == "" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": false})
-			return
-		}
-		// desired rewrite set: what the sync maintains, with live answers
-		answer := hostIP(cfg.Bridge)
-		type rewrite struct {
-			Domain string `json:"domain"`
-			Answer string `json:"answer"`
-		}
-		names := adguardNames(dedupeSites(domains), cfg)
-		rewrites := make([]rewrite, 0, len(names))
-		for _, n := range names {
-			rewrites = append(rewrites, rewrite{Domain: n, Answer: answer})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"enabled":   true,
-			"count":     len(rewrites),
-			"rewrites":  rewrites,
-			"suffix":    strings.Trim(strings.TrimRight(cfg.AdguardSuffix, "."), "."),
-			"last_sync": st,
-		})
-	})
 	mux.HandleFunc("GET /api/cloudflare", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		st := a.cf
@@ -505,7 +448,7 @@ func (a *App) routes() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
 	})
-	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/adguard, /api/cloudflare, /healthz)", a.cfg.APIAddr)
+	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/cloudflare, /healthz)", a.cfg.APIAddr)
 	if a.cfg.APIToken != "" {
 		a.log.Printf("api: token auth ENABLED (healthz exempt)")
 	}
@@ -592,31 +535,6 @@ func (a *App) cycle(ctx context.Context) error {
 		if err := applyAvahi(a.log, publish, a.cfg); err != nil {
 			a.log.Printf("avahi: apply failed: %v", err)
 		}
-	}
-	if a.cfg.AdguardURL != "" {
-		st := AdguardStatus{Enabled: true, At: time.Now()}
-		answer := hostIP(a.cfg.Bridge)
-		switch {
-		case a.cfg.AdguardUser == "" || a.cfg.AdguardPassword == "":
-			st.Skipped = "user/password missing"
-			a.log.Printf("adguard: %s — sync skipped", st.Skipped)
-		case answer == "":
-			st.Skipped = "no host IPv4 on " + a.cfg.Bridge
-			a.log.Printf("adguard: %s — sync skipped", st.Skipped)
-		default:
-			s, err := applyAdguard(publish, answer, a.cfg)
-			st.Synced, st.Added, st.Updated, st.Removed = s.Names, s.Added, s.Updated, s.Removed
-			if err != nil {
-				st.Error = err.Error()
-				a.log.Printf("adguard: sync failed: %v", err)
-			} else {
-				a.log.Printf("adguard: synced %d names (added %d, updated %d, removed %d)",
-					st.Synced, len(st.Added), len(st.Updated), len(st.Removed))
-			}
-		}
-		a.mu.Lock()
-		a.adguard = st
-		a.mu.Unlock()
 	}
 	if cfEnabled(a.cfg) {
 		st := CloudflareStatus{Enabled: true, At: time.Now()}
@@ -741,8 +659,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v adguard=%v cloudflare=%v api_auth=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.AdguardURL != "", cfEnabled(cfg), cfg.APIToken != "")
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v cloudflare=%v api_auth=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfEnabled(cfg), cfg.APIToken != "")
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {
