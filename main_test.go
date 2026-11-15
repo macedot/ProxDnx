@@ -804,6 +804,19 @@ func TestPortalHTML(t *testing.T) {
 	if n := strings.Count(off, `href="https://'+`); n != 0 {
 		t.Errorf("portal must not hardcode https links, found %d sites", n)
 	}
+	// the domain URL must be a plain link that opens in a new tab — never
+	// a click-hijacked edit trigger
+	if strings.Contains(off, `preventDefault();startEdit`) {
+		t.Error("portal must not hijack domain-link clicks for editing — the URL must navigate")
+	}
+	if n := strings.Count(off, `target="_blank"`); n < 2 {
+		t.Errorf("service URLs (app + static cards) must open in a new tab, found %d target=_blank sites", n)
+	}
+	// editing is a double-click on the card rectangle, guarded so a
+	// double-click on the link itself still just follows the link
+	if !strings.Contains(off, `ondblclick`) || !strings.Contains(off, `closest("a")`) {
+		t.Error("portal must trigger the URL edit via card ondblclick (skipping link targets)")
+	}
 	// the URL may carry ?token= — cross-origin navigation must never carry it
 	if !strings.Contains(off, `<meta name="referrer" content="no-referrer">`) {
 		t.Error("portal must suppress the Referer header (token in URL)")

@@ -149,8 +149,9 @@ async function load(){
         +(x.mismatch?'<span class="chip warn">⚠ name mismatch — page title: "'+esc(x.title||"?")+'"</span>':'');
       const link=document.createElement("a");link.className="domain";link.href=proto()+"//"+esc(x.domain)+"/";
       link.textContent=x.domain;
-      link.title="click to edit the URL name";
-      link.onclick=(ev)=>{ev.preventDefault();startEdit(c,x,link)};
+      // the URL is a plain link: it always opens in a new tab; editing the
+      // URL name is a double-click on the card itself
+      link.target="_blank";link.rel="noopener noreferrer";
       c.appendChild(link);
       const svc=document.createElement("div");svc.className="svc";svc.textContent=x.service;
       c.appendChild(svc);
@@ -158,6 +159,8 @@ async function load(){
       const ch=document.createElement("div");ch.className="chips";
       ch.innerHTML='<span class="chip">🖥 <b>'+esc(x.name)+'</b></span><span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span>';
       c.appendChild(ch);
+      c.title="double-click to edit the URL name";
+      c.ondblclick=(ev)=>{if(ev.target.closest("a"))return;startEdit(c,x,link)};
       g.appendChild(c);
     });
     document.getElementById("n").textContent=d.count;
@@ -173,7 +176,7 @@ async function loadStatic(){
     g.innerHTML="";
     (s.routes||[]).forEach(r=>{
       const c=document.createElement("div");c.className="card";
-      c.innerHTML='<a class="domain" href="'+proto()+'//'+esc(r.names[0])+'/">'+esc(r.label)+'</a>'
+      c.innerHTML='<a class="domain" target="_blank" rel="noopener noreferrer" href="'+proto()+'//'+esc(r.names[0])+'/">'+esc(r.label)+'</a>'
         +'<div class="svc">'+esc(r.desc)+' → <b style="color:var(--text)">'+esc(r.upstream)+'</b></div>'
         +'<div class="chips">'+(r.names||[]).map(n=>'<span class="chip">🏷 <b>'+esc(n)+'</b></span>').join("")+'</div>';
       g.appendChild(c);
