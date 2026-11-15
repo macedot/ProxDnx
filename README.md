@@ -100,10 +100,14 @@ https://immich.local        https://plex.local        https://adguard-home.local
 `https://apps.<host>.local` serves the dashboard. Log in once with the
 generated `api_token` — a 30-day HttpOnly session cookie keeps you signed
 in. Every app appears as a `<name>.local` card plus the static
-infrastructure entries; service URLs always open in a **new tab**.
-**Double-click a card** to edit its published URL (the service name never
-changes) — renames apply to caddy, avahi and any future writer within
-seconds and persist across restarts.
+infrastructure entries, all in the same card format (domain link, service
+line, chip row); service URLs always open in a **new tab**.
+
+**Editing a URL**: double-click the card — or focus it with **Tab** and
+press **Enter**/**F2**. While editing, **Enter** saves, **Escape**
+discards, and the auto-refresh pauses so your input is never wiped.
+Renames apply to caddy, avahi and any future writer within seconds and
+persist across restarts (the service name itself never changes).
 
 > 🔐 The first time, import Caddy's local root CA on your clients
 > (`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`)

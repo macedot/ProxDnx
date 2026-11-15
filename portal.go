@@ -152,7 +152,7 @@ async function load(){
       const c=document.createElement("div");c.className="card"+(x.stale?" dim":"");
       const flags=(x.stale?'<span class="chip bad">⚠ stale — port closed</span>':'')
         +(x.mismatch?'<span class="chip warn">⚠ name mismatch — page title: "'+esc(x.title||"?")+'"</span>':'');
-      const link=document.createElement("a");link.className="domain";link.href=proto()+"//"+esc(x.domain)+"/";
+      const link=document.createElement("a");link.className="domain";link.href=proto()+"//"+x.domain+"/";
       link.textContent=x.domain;
       // the URL is a plain link: it always opens in a new tab; editing the
       // URL name is a double-click on the card itself (or Enter/F2 on the
@@ -204,7 +204,7 @@ async function loadStatic(){
     sec.hidden=false;
   }catch(e){/* static section stays hidden */}
 }
-load();loadStatic();setInterval(()=>{load();loadStatic()},30000);
+load();loadStatic();setInterval(()=>{if(EDITING)return;load();loadStatic()},30000);
 </script>
 </body>
 </html>
