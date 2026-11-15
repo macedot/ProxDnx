@@ -805,9 +805,10 @@ func TestPortalHTML(t *testing.T) {
 		t.Errorf("portal must not hardcode https links, found %d sites", n)
 	}
 	// the domain URL must be a plain link that opens in a new tab — never
-	// a click-hijacked edit trigger
-	if strings.Contains(off, `preventDefault();startEdit`) {
-		t.Error("portal must not hijack domain-link clicks for editing — the URL must navigate")
+	// a click-hijacked edit trigger (the link itself must carry no
+	// onclick; edits live on the card's click/keydown handlers)
+	if strings.Contains(off, `link.onclick`) {
+		t.Error("portal must not attach an onclick handler to the domain link — the URL must navigate")
 	}
 	if n := strings.Count(off, `target="_blank"`); n < 2 {
 		t.Errorf("service URLs (app + static cards) must open in a new tab, found %d target=_blank sites", n)
@@ -818,9 +819,17 @@ func TestPortalHTML(t *testing.T) {
 	if !strings.Contains(off, `ev.detail===2`) || !strings.Contains(off, `closest("a")`) {
 		t.Error("portal must trigger the URL edit via ev.detail===2 on the card (skipping link targets)")
 	}
-	// keyboard: Enter confirms, Escape discards while editing
+	// keyboard: Enter confirms, Escape discards while editing; the card
+	// itself is focusable (tabIndex=0) and edits on Enter/F2 via a
+	// keydown handler that leaves keys on children native
 	if !strings.Contains(off, `key==="Enter"`) || !strings.Contains(off, `key==="Escape"`) {
 		t.Error("edit input must map Enter to save and Escape to discard")
+	}
+	if !strings.Contains(off, `c.tabIndex=0`) || !strings.Contains(off, `ev.target!==c`) {
+		t.Error("cards must be focusable and edit on Enter/F2 without hijacking child keys")
+	}
+	if !strings.Contains(off, `:focus-visible`) {
+		t.Error("portal must show a visible focus outline for keyboard users")
 	}
 	// the URL may carry ?token= — cross-origin navigation must never carry it
 	if !strings.Contains(off, `<meta name="referrer" content="no-referrer">`) {

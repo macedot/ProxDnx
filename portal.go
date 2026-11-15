@@ -75,6 +75,7 @@ const portalHTMLRaw = `<!doctype html>
   .card:hover{border-color:var(--accent);transform:translateY(-1px)}
   .card a.domain{display:block;font-size:16px;font-weight:600;color:var(--link);text-decoration:none;word-break:break-word}
   .card a.domain:hover{text-decoration:underline}
+  .card:focus-visible,a.domain:focus-visible,.ebtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
   .card .svc{color:var(--muted);font-size:13px;margin-top:2px}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
   .chip{background:#262a30;border:1px solid var(--border);border-radius:6px;padding:2px 8px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
@@ -154,7 +155,8 @@ async function load(){
       const link=document.createElement("a");link.className="domain";link.href=proto()+"//"+esc(x.domain)+"/";
       link.textContent=x.domain;
       // the URL is a plain link: it always opens in a new tab; editing the
-      // URL name is a double-click on the card itself
+      // URL name is a double-click on the card itself (or Enter/F2 on the
+      // focused card — the portal is keyboard-navigable)
       link.target="_blank";link.rel="noopener noreferrer";
       c.appendChild(link);
       const svc=document.createElement("div");svc.className="svc";svc.textContent=x.service;
@@ -163,12 +165,19 @@ async function load(){
       const ch=document.createElement("div");ch.className="chips";
       ch.innerHTML='<span class="chip">🖥 <b>'+esc(x.name)+'</b></span><span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span>';
       c.appendChild(ch);
-      c.title="double-click to edit the URL name";
+      c.title="double-click (or Enter) to edit the URL name";
+      c.tabIndex=0;
       // click-count detection (ev.detail===2) is steadier than the native
       // dblclick event; links and the edit row are exempt
       c.addEventListener("click",(ev)=>{
         if(ev.target.closest("a")||ev.target.closest(".editrow"))return;
         if(ev.detail===2)startEdit(c,x,link);
+      });
+      // keyboard: Enter/F2 on the focused card edits; keys on children
+      // (link, buttons, input) keep their native meaning
+      c.addEventListener("keydown",(ev)=>{
+        if(ev.target!==c)return;
+        if(ev.key==="Enter"||ev.key==="F2"){ev.preventDefault();startEdit(c,x,link);}
       });
       g.appendChild(c);
     });
