@@ -572,8 +572,11 @@ func TestPortalHTML(t *testing.T) {
 	if strings.Count(off, `href="'+proto()+'//`) != 3 {
 		t.Errorf("cards must use proto() for all three sections: %d sites", strings.Count(off, `href="'+proto()+'//`))
 	}
-	if strings.Contains(off, `href="https://'+`) {
-		t.Error("hardcoded https link generation still present")
+	// the only hardcoded https link generation allowed is the cloudflare
+	// section (public names are always https — TLS ends at the CF edge);
+	// every .local section must derive the protocol from the page access
+	if n := strings.Count(off, `href="https://'+`); n != 1 {
+		t.Errorf("expected exactly the cloudflare section to hardcode https, found %d sites", n)
 	}
 	// the URL may carry ?token= — cross-origin navigation must never carry it
 	if !strings.Contains(off, `<meta name="referrer" content="no-referrer">`) {

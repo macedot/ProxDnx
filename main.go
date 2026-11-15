@@ -76,8 +76,13 @@ type Config struct {
 	AdguardPassword string // AdGuard Home password
 	AdguardSuffix   string // optional: additionally publish <name>.<suffix> rewrites
 	AdguardPrune    bool   // prune managed AdGuard rewrites that are no longer published
-	LogFile         string
-	Path            string // resolved config file path
+
+	CloudflareToken    string // Cloudflare API token; "" = tunnel sync off
+	CloudflareZone     string // public zone (e.g. example.com)
+	CloudflareTunnelID string // tunnel UUID; "" = auto-discover the first non-deleted tunnel
+	CloudflarePrune    bool   // prune managed DNS records/ingress that are no longer published
+	LogFile            string
+	Path               string // resolved config file path
 
 	created bool // config file was bootstrapped this run
 	once    bool // -once: run a single cycle and exit
@@ -119,6 +124,7 @@ type App struct {
 	domains []Record
 	stats   CycleStats
 	adguard AdguardStatus
+	cf      CloudflareStatus
 }
 
 // AdguardStatus is the outcome of the latest AdGuard rewrite-sync pass; it is
@@ -454,11 +460,39 @@ func (a *App) routes() http.Handler {
 			"last_sync": st,
 		})
 	})
+	mux.HandleFunc("GET /api/cloudflare", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		st := a.cf
+		domains := a.domains
+		cfg := a.cfg
+		a.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if !cfEnabled(cfg) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": false})
+			return
+		}
+		type route struct {
+			Hostname string `json:"hostname"`
+			URL      string `json:"url"`
+		}
+		names := cfPublicNames(dedupeSites(domains), cfg)
+		routes := make([]route, 0, len(names))
+		for _, n := range names {
+			routes = append(routes, route{Hostname: n, URL: "https://" + n})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled":   true,
+			"zone":      strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."),
+			"count":     len(routes),
+			"routes":    routes,
+			"last_sync": st,
+		})
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
 	})
-	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/adguard, /healthz)", a.cfg.APIAddr)
+	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/adguard, /api/cloudflare, /healthz)", a.cfg.APIAddr)
 	if a.cfg.APIToken != "" {
 		a.log.Printf("api: token auth ENABLED (healthz exempt)")
 	}
@@ -571,6 +605,31 @@ func (a *App) cycle(ctx context.Context) error {
 		a.adguard = st
 		a.mu.Unlock()
 	}
+	if cfEnabled(a.cfg) {
+		st := CloudflareStatus{Enabled: true, At: time.Now()}
+		if answer := hostIP(a.cfg.Bridge); answer == "" {
+			st.Skipped = "no host IPv4 on " + a.cfg.Bridge
+			a.log.Printf("cloudflare: %s — sync skipped", st.Skipped)
+		} else {
+			s, err := cfSync(publish, answer, a.cfg)
+			st.Zone = s.Zone
+			st.TunnelID = s.TunnelID
+			st.Count, st.Added, st.Updated, st.Removed, st.Conflicts = s.Count, s.Added, s.Updated, s.Removed, s.Conflicts
+			if err != nil {
+				st.Error = err.Error()
+				a.log.Printf("cloudflare: sync failed: %v", err)
+			} else {
+				a.log.Printf("cloudflare: synced %d public names via tunnel %.8s… (added %d, updated %d, removed %d, conflicts %d)",
+					st.Count, st.TunnelID, len(st.Added), len(st.Updated), len(st.Removed), len(st.Conflicts))
+				if len(st.Conflicts) > 0 {
+					a.log.Printf("cloudflare: conflicts (user-owned records left untouched): %s", strings.Join(st.Conflicts, ", "))
+				}
+			}
+		}
+		a.mu.Lock()
+		a.cf = st
+		a.mu.Unlock()
+	}
 
 	stats := CycleStats{
 		At: start, Kept: len(kept), Added: len(added), Removed: len(removed),
@@ -669,8 +728,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v adguard=%v api_auth=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.AdguardURL != "", cfg.APIToken != "")
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v adguard=%v cloudflare=%v api_auth=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.AdguardURL != "", cfEnabled(cfg), cfg.APIToken != "")
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

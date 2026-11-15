@@ -98,7 +98,7 @@ func loadConfig(path string, c *Config) (bool, error) {
 				return true, fmt.Errorf("%s: bad duration %q: %v", k, v, err)
 			}
 			c.Interval = d
-		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix", "adguard_prune":
+		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix", "adguard_prune", "cloudflare_prune":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return true, fmt.Errorf("%s: bad bool %q: %v", k, v, err)
@@ -120,6 +120,8 @@ func loadConfig(path string, c *Config) (bool, error) {
 				c.AutoFix = b
 			case "adguard_prune":
 				c.AdguardPrune = b
+			case "cloudflare_prune":
+				c.CloudflarePrune = b
 			default:
 				c.Scan = b
 			}
@@ -135,6 +137,12 @@ func loadConfig(path string, c *Config) (bool, error) {
 			c.AdguardPassword = v
 		case "adguard_suffix":
 			c.AdguardSuffix = v
+		case "cloudflare_token":
+			c.CloudflareToken = v
+		case "cloudflare_zone":
+			c.CloudflareZone = v
+		case "cloudflare_tunnel_id":
+			c.CloudflareTunnelID = v
 		case "log_file":
 			c.LogFile = v
 		default:
@@ -175,6 +183,10 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "adguard_password: %s\n", yamlValue(c.AdguardPassword))
 	fmt.Fprintf(&b, "adguard_suffix: %s\n", yamlValue(c.AdguardSuffix))
 	fmt.Fprintf(&b, "adguard_prune: %s\n", strconv.FormatBool(c.AdguardPrune))
+	fmt.Fprintf(&b, "cloudflare_token: %s\n", yamlValue(c.CloudflareToken))
+	fmt.Fprintf(&b, "cloudflare_zone: %s\n", yamlValue(c.CloudflareZone))
+	fmt.Fprintf(&b, "cloudflare_tunnel_id: %s\n", yamlValue(c.CloudflareTunnelID))
+	fmt.Fprintf(&b, "cloudflare_prune: %s\n", strconv.FormatBool(c.CloudflarePrune))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
 	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -253,6 +265,10 @@ func applyEnv(c *Config) error {
 		{"PROXDNX_ADGUARD_PASSWORD", str(func(c *Config, v string) { c.AdguardPassword = v })},
 		{"PROXDNX_ADGUARD_SUFFIX", str(func(c *Config, v string) { c.AdguardSuffix = v })},
 		{"PROXDNX_ADGUARD_PRUNE", b(func(c *Config, v bool) { c.AdguardPrune = v })},
+		{"PROXDNX_CLOUDFLARE_TOKEN", str(func(c *Config, v string) { c.CloudflareToken = v })},
+		{"PROXDNX_CLOUDFLARE_ZONE", str(func(c *Config, v string) { c.CloudflareZone = v })},
+		{"PROXDNX_CLOUDFLARE_TUNNEL_ID", str(func(c *Config, v string) { c.CloudflareTunnelID = v })},
+		{"PROXDNX_CLOUDFLARE_PRUNE", b(func(c *Config, v bool) { c.CloudflarePrune = v })},
 		{"PROXDNX_LOG_FILE", str(func(c *Config, v string) { c.LogFile = v })},
 	}
 	// legacy aliases first: the PROXDNX_* bindings below override on conflict
