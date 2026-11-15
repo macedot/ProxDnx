@@ -65,7 +65,6 @@ func TestLoadConfig(t *testing.T) {
 		"scan: true",
 		"api_addr: 127.0.0.1:1234",
 		"log_file: /tmp/x.log",
-		`cloudflare_only: "Immich, sonarr"`,
 		"unknown_key: tolerated",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

@@ -215,7 +215,8 @@ else
         fi
         msg_ok "sha256 verified"
     else
-        msg_warn "checksums.txt unavailable for ${VERSION} — skipping verification"
+        msg_error "checksums.txt unavailable for ${VERSION} — refusing to install an unverified binary"
+        exit 1
     fi
     tar -xzf "$TMP/dl.tar.gz" -C "$TMP" || { msg_error "extract failed"; exit 1; }
     [ -f "$TMP/proxdnx" ] || { msg_error "archive missing the proxdnx binary"; exit 1; }

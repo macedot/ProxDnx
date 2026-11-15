@@ -67,16 +67,10 @@ const portalHTMLRaw = `<!doctype html>
   header h1 span{color:var(--accent)}
   header p{margin:0;color:var(--muted);font-size:13px}
   header .n{color:var(--accent);font-weight:700}
-  nav#tabs{display:flex;gap:6px;padding:14px 32px 0}
-  .tab{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--muted);font:600 13px system-ui,sans-serif;padding:8px 16px;cursor:pointer}
-  .tab:hover{color:var(--text)}
-  .tab.active{color:#fff;background:var(--accent);border-color:var(--accent)}
-  .tab[hidden]{display:none}
   main,#staticgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
   main{padding:18px 32px 26px}
   section#static{padding:0 32px 30px}
   section#static h2{margin:0 0 12px;font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
-  main.hiddenview,section.hiddenview{display:none}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;transition:border-color .15s,transform .15s}
   .card:hover{border-color:var(--accent);transform:translateY(-1px)}
   .card a.domain{display:block;font-size:16px;font-weight:600;color:var(--link);text-decoration:none;word-break:break-word}
@@ -103,9 +97,6 @@ const portalHTMLRaw = `<!doctype html>
   <h1>🧭 Prox<span>Dnx</span></h1>
   <p><span class="n" id="n">…</span> published services · updated <span id="updated">…</span></p>
 </header>
-<nav id="tabs">
-  <button class="tab active" data-tab="local" onclick="showTab('local')">Local</button>
-</nav>
 <main id="grid"><div class="empty">loading…</div></main>
 <section id="static">
   <h2>Infrastructure</h2>
@@ -146,16 +137,6 @@ function startEdit(card,x,link){
   link.replaceWith(inp);
   card.appendChild(actions);
   inp.focus();
-}
-// provider tabs: Local = app grid + infrastructure; the other tabs appear
-// only when the corresponding sync is enabled (their /api endpoints say so)
-let ACTIVE_TAB="local";
-function showTab(name){
-  ACTIVE_TAB=name;
-  document.querySelectorAll("#tabs .tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
-  const local=name==="local";
-  document.getElementById("grid").classList.toggle("hiddenview",!local);
-  document.getElementById("static").classList.toggle("hiddenview",!local);
 }
 async function load(){
   try{

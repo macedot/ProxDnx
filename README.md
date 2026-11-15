@@ -242,8 +242,7 @@ are exercised with `httptest`.
 
 Security posture: renderer labels are slug-restricted (`[a-z0-9-]`), the
 config is validated at startup (URL scheme, interface name, CIDR, listen
-address, positive interval, cloudflare pairings — zone required, open
-`api_token` refused, tunnel IDs must be UUIDs), the API server enforces
+address, positive interval), the API server enforces
 read/header/idle timeouts, `nosniff` / `no-store`, `X-Frame-Options: DENY`
 and a restrictive CSP, token auth (hash-then-compare, length-leak-free)
 protects every route (`/healthz` exempt) with the token logged only into a

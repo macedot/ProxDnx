@@ -67,19 +67,6 @@ func yamlValue(s string) string {
 	return s
 }
 
-// parseNameList splits a comma-separated slug list (flat-YAML/env friendly):
-// entries are trimmed and lower-cased, empties dropped; "" yields nil.
-func parseNameList(v string) []string {
-	var out []string
-	for _, s := range strings.Split(v, ",") {
-		s = strings.ToLower(strings.TrimSpace(s))
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // loadConfig merges a config file into c; returns false if the file is absent.
 func loadConfig(path string, c *Config) (bool, error) {
 	data, err := os.ReadFile(path)
