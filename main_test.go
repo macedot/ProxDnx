@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,12 +41,21 @@ func get(t *testing.T, h http.Handler, path string) (*http.Response, string) {
 }
 
 // getReq serves h once and issues req against it (URL retargeted to the
-// httptest server, headers preserved).
+// httptest server, headers and body preserved).
 func getReq(t *testing.T, h http.Handler, req *http.Request) (*http.Response, string) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	defer srv.Close()
-	out, err := http.NewRequest(req.Method, srv.URL+req.URL.RequestURI(), nil)
+	var body io.Reader
+	if req.Body != nil {
+		b, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(b)
+	}
+	out, err := http.NewRequest(req.Method, srv.URL+req.URL.RequestURI(), body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,8 +65,8 @@ func getReq(t *testing.T, h http.Handler, req *http.Request) (*http.Response, st
 		t.Fatalf("%s %s: %v", req.Method, req.URL, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return resp, string(body)
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
 }
 
 func TestRoutesHealthz(t *testing.T) {
@@ -330,6 +340,97 @@ func min(a, b int) int {
 	return b
 }
 
+func TestApplyNameOverrides(t *testing.T) {
+	recs := []Record{
+		{Service: "Sonarr", Slug: "sonarr", Domain: "sonarr.local"},
+		{Service: "Immich", Slug: "immich", Domain: "immich.local"},
+	}
+	names := map[string]string{"sonarr": "media"}
+	applyNameOverrides(recs, names)
+	if recs[0].effSlug != "media" || recs[0].Domain != "media.local" {
+		t.Errorf("override not applied: %+v", recs[0])
+	}
+	if recs[0].Service != "Sonarr" {
+		t.Errorf("service name must never change: %+v", recs[0])
+	}
+	if recs[1].effSlug != "immich" || recs[1].Domain != "immich.local" {
+		t.Errorf("non-overridden record changed: %+v", recs[1])
+	}
+	// dedupe must publish the effective slug
+	sites := dedupeSites(recs)
+	if _, ok := sites["media"]; !ok {
+		t.Errorf("dedupeSites must use the effective slug, have %v", sites)
+	}
+}
+
+func TestNamesAPI(t *testing.T) {
+	app := newTestApp([]Record{
+		{Domain: "sonarr.local", Slug: "sonarr", Service: "Sonarr", IP: "10.4.2.150", Port: 8989},
+		{Domain: "immich.local", Slug: "immich", Service: "Immich", IP: "10.4.2.119", Port: 2283},
+	})
+	app.namesPath = filepath.Join(t.TempDir(), "names.json")
+	app.names = map[string]string{}
+	h := app.routes()
+
+	post := func(body string) (*http.Response, string) {
+		req, _ := http.NewRequest(http.MethodPost, "http://api/api/names", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		return getReq(t, h, req)
+	}
+
+	// rename ok
+	resp, body := post(`{"slug":"sonarr","name":"Media"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("rename: %d %s", resp.StatusCode, body)
+	}
+	if _, ok := app.names["sonarr"]; !ok || app.names["sonarr"] != "media" {
+		t.Errorf("override not stored: %v", app.names)
+	}
+	resp, body = get(t, h, "/api/domains")
+	if !strings.Contains(body, `"domain":"media.local"`) || !strings.Contains(body, `"slug":"sonarr"`) {
+		t.Errorf("renamed domain missing (slug key must stay): %s", body)
+	}
+	if strings.Contains(body, `"service":"Media"`) {
+		t.Error("service name must not change")
+	}
+	// persisted
+	b, err := os.ReadFile(app.namesPath)
+	if err != nil || !strings.Contains(string(b), `"media"`) {
+		t.Errorf("names.json not persisted: %v %s", err, b)
+	}
+
+	// invalid charset
+	if resp, _ = post(`{"slug":"sonarr","name":"not ok!"}`); resp.StatusCode != 400 {
+		t.Errorf("invalid name must 400, got %d", resp.StatusCode)
+	}
+	// collision with another app's slug
+	if resp, _ = post(`{"slug":"sonarr","name":"immich"}`); resp.StatusCode != 409 {
+		t.Errorf("collision must 409, got %d", resp.StatusCode)
+	}
+	// unknown slug
+	if resp, _ = post(`{"slug":"nope","name":"whatever"}`); resp.StatusCode != 404 {
+		t.Errorf("unknown slug must 404, got %d", resp.StatusCode)
+	}
+	// no-op
+	if resp, _ = post(`{"slug":"sonarr","name":"media.local"}`); resp.StatusCode != 400 {
+		t.Errorf("no-change rename must 400, got %d", resp.StatusCode)
+	}
+
+	// revert via DELETE
+	req, _ := http.NewRequest(http.MethodDelete, "http://api/api/names", strings.NewReader(`{"slug":"sonarr"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, _ = getReq(t, h, req); resp.StatusCode != 200 {
+		t.Errorf("delete override: %d", resp.StatusCode)
+	}
+	resp, body = get(t, h, "/api/domains")
+	if !strings.Contains(body, `"domain":"sonarr.local"`) {
+		t.Errorf("revert failed: %s", body)
+	}
+	if _, ok := app.names["sonarr"]; ok {
+		t.Error("override not removed")
+	}
+}
+
 func TestLoopbackHost(t *testing.T) {
 	cases := map[string]bool{
 		"127.0.0.1": true,
@@ -568,9 +669,10 @@ func TestPortalHTML(t *testing.T) {
 		t.Error("force=true must bake true into the page")
 	}
 	// app cards and infrastructure cards must derive the protocol from
-	// the page access, never hardcode it
-	if strings.Count(off, `href="'+proto()+'//`) != 2 {
-		t.Errorf("cards must use proto() for both sections: %d sites", strings.Count(off, `href="'+proto()+'//`))
+	// the page access, never hardcode it (app cards build the link with
+	// link.href, the static section with a template string)
+	if n := strings.Count(off, `href="'+proto()+'//`) + strings.Count(off, `link.href=proto()+"//"`); n != 2 {
+		t.Errorf("cards must use proto() for app + static sections, got %d", n)
 	}
 	// the only hardcoded https link generation allowed is the cloudflare
 	// section (public names are always https — TLS ends at the CF edge);

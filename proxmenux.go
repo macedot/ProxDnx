@@ -46,7 +46,8 @@ func NewClient(cfg Config) *Client {
 // Record is one published domain.
 type Record struct {
 	Domain   string `json:"domain"`
-	Service  string `json:"service"` // ProxMenux Apps service name
+	Slug     string `json:"slug"`    // override key: the default slug (from the service name)
+	Service  string `json:"service"` // ProxMenux Apps service name (never user-editable)
 	Name     string `json:"name"`    // LXC hostname
 	IP       string `json:"ip"`
 	Port     int    `json:"port"`
@@ -54,8 +55,9 @@ type Record struct {
 	Title    string `json:"title,omitempty"`    // detected UI page title ("" unknown)
 	Mismatch bool   `json:"mismatch,omitempty"` // detected UI title disagrees with Service
 
-	vmid  int    `json:"-"` // ProxMenux sidecar identity for autofix (internal)
-	appID string `json:"-"`
+	effSlug string `json:"-"` // slug actually published (default = Slug, or a rename)
+	vmid    int    `json:"-"` // ProxMenux sidecar identity for autofix (internal)
+	appID   string `json:"-"`
 }
 
 type Guest struct {
@@ -273,6 +275,7 @@ func (c *Client) fetchRecords(cfg Config, notef func(string, ...any)) ([]Record,
 			}
 			recs = append(recs, Record{
 				Domain:  slugify(svc) + ".local",
+				Slug:    slugify(svc),
 				Service: svc,
 				Name:    g.Name,
 				IP:      ip,

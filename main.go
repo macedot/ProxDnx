@@ -29,9 +29,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -115,10 +117,107 @@ type App struct {
 	client *Client
 	log    *log.Logger
 
-	mu      sync.Mutex
-	domains []Record
-	stats   CycleStats
-	cf      CloudflareStatus
+	mu        sync.Mutex
+	domains   []Record
+	stats     CycleStats
+	cf        CloudflareStatus
+	names     map[string]string // slug -> renamed slug (user-edited URLs)
+	namesPath string
+	cycleBusy atomic.Bool
+}
+
+// nameRe is the charset a user-edited slug may use: a valid DNS label.
+var nameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// loadNames reads the user-edited name overrides (names.json next to the
+// config file). Missing or corrupt file = no overrides.
+func loadNames(path string) map[string]string {
+	m := map[string]string{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal(b, &m)
+	out := map[string]string{}
+	for k, v := range m {
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = normalizeName(v)
+		if k != "" && v != "" && nameRe.MatchString(v) && nameRe.MatchString(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// saveNames persists the overrides atomically (writeIfChanged: skips when
+// unchanged, pid-unique temp otherwise).
+func saveNames(path string, names map[string]string) error {
+	b, err := json.MarshalIndent(names, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = writeIfChanged(path, string(b)+"\n", 0o600)
+	return err
+}
+
+// normalizeName cleans a user-provided label: lower-case, whitespace and a
+// trailing ".local" stripped, trimmed of separator chars.
+func normalizeName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSuffix(s, ".local")
+	return strings.Trim(s, "-._ ")
+}
+
+// applyNameOverrides rewrites each record's published slug/domain according
+// to the override map. The service name is never touched.
+func applyNameOverrides(recs []Record, names map[string]string) {
+	for i := range recs {
+		r := &recs[i]
+		if r.Slug == "" {
+			r.Slug = slugify(r.Service)
+		}
+		r.effSlug = r.Slug
+		if n, ok := names[r.Slug]; ok && n != "" {
+			r.effSlug = n
+		}
+		r.Domain = r.effSlug + ".local"
+	}
+}
+
+// validRename checks a rename against the current record set: the key must
+// be a known slug, the new name a valid label, and it must not collide with
+// another app's slug. Returns an HTTP status + message.
+func validRename(recs []Record, names map[string]string, slug, name string) (int, string) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	name = normalizeName(name)
+	if slug == "" {
+		return http.StatusBadRequest, "missing slug"
+	}
+	if !nameRe.MatchString(name) {
+		return http.StatusBadRequest, "invalid name: use letters, digits and dashes"
+	}
+	known := false
+	for _, r := range recs {
+		if r.Slug == slug {
+			known = true
+			continue
+		}
+		if r.Slug == name || r.effSlug == name {
+			return http.StatusConflict, "name already used by " + r.Domain
+		}
+	}
+	if v, ok := names[slug]; ok && v == name {
+		return http.StatusBadRequest, "no change"
+	}
+	for k, v := range names {
+		if k != slug && v == name {
+			return http.StatusConflict, "name already used by an override"
+		}
+	}
+	if !known {
+		return http.StatusNotFound, "unknown slug: " + slug
+	}
+	return 0, name
 }
 
 // execCommand runs a command and returns combined output.
@@ -444,6 +543,70 @@ func (a *App) routes() http.Handler {
 			"last_sync": st,
 		})
 	})
+	mux.HandleFunc("POST /api/names", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Slug string `json:"slug"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		a.mu.Lock()
+		if a.names == nil {
+			a.names = map[string]string{}
+		}
+		status, msg := validRename(a.domains, a.names, in.Slug, in.Name)
+		if status != 0 {
+			a.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = fmt.Fprintf(w, `{"error":%q}`, msg)
+			return
+		}
+		a.names[strings.ToLower(strings.TrimSpace(in.Slug))] = msg
+		applyNameOverrides(a.domains, a.names)
+		saveErr := saveNames(a.namesPath, a.names)
+		a.mu.Unlock()
+		if saveErr != nil {
+			a.log.Printf("names: persist failed: %v (applied in-memory)", saveErr)
+		} else {
+			a.log.Printf("names: %s -> %s saved", in.Slug, msg)
+		}
+		a.triggerCycle()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	})
+	mux.HandleFunc("DELETE /api/names", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Slug string `json:"slug"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		slug := strings.ToLower(strings.TrimSpace(in.Slug))
+		a.mu.Lock()
+		if _, ok := a.names[slug]; !ok {
+			a.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"no override for this slug"}`)
+			return
+		}
+		delete(a.names, slug)
+		applyNameOverrides(a.domains, a.names)
+		saveErr := saveNames(a.namesPath, a.names)
+		a.mu.Unlock()
+		if saveErr != nil {
+			a.log.Printf("names: persist failed: %v (applied in-memory)", saveErr)
+		} else {
+			a.log.Printf("names: override for %s removed (back to default)", slug)
+		}
+		a.triggerCycle()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
@@ -486,6 +649,9 @@ func (a *App) cycle(ctx context.Context) error {
 		a.setStats(CycleStats{At: start, Error: err.Error()})
 		return err
 	}
+	a.mu.Lock()
+	applyNameOverrides(recs, a.names)
+	a.mu.Unlock()
 
 	cur := make(map[string]Record, len(recs))
 	for _, r := range recs {
@@ -674,6 +840,18 @@ func main() {
 	}
 
 	app := &App{cfg: cfg, client: NewClient(cfg), log: logger}
+	if cfg.Path != "" {
+		app.namesPath = filepath.Join(filepath.Dir(cfg.Path), "names.json")
+		app.names = loadNames(app.namesPath)
+		if len(app.names) > 0 {
+			keys := make([]string, 0, len(app.names))
+			for k := range app.names {
+				keys = append(keys, k+"->"+app.names[k])
+			}
+			sort.Strings(keys)
+			logger.Printf("names: %d override(s): %s", len(app.names), strings.Join(keys, ", "))
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -703,11 +881,36 @@ func main() {
 			logger.Printf("api server failed: %v", err)
 			return
 		case <-ticker.C:
-			if err := app.cycle(ctx); err != nil {
-				logger.Printf("cycle failed: %v", err)
-			}
+			app.runCycle(ctx)
 		}
 	}
+}
+
+// runCycle runs one cycle guarded by cycleBusy: a cycle triggered from the
+// rename API (out-of-band) can never overlap the ticker's cycle.
+func (a *App) runCycle(ctx context.Context) {
+	if !a.cycleBusy.CompareAndSwap(false, true) {
+		a.log.Printf("cycle: one already running — skipped")
+		return
+	}
+	defer a.cycleBusy.Store(false)
+	if err := a.cycle(ctx); err != nil {
+		a.log.Printf("cycle failed: %v", err)
+	}
+}
+
+// triggerCycle fires a background cycle so a rename converges caddy/avahi
+// immediately instead of waiting for the next tick. Apps without a monitor
+// client (tests, API-only) skip it.
+func (a *App) triggerCycle() {
+	if a.client == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		a.runCycle(ctx)
+	}()
 }
 
 func fatalf(format string, args ...any) {

@@ -131,6 +131,12 @@ func dedupeSites(recs []Record) map[string]Record {
 	sites := make(map[string]Record, len(recs))
 	for _, r := range recs {
 		base := slugify(r.Service)
+		if r.Slug != "" {
+			base = r.Slug // rename override key (default slug)
+		}
+		if r.effSlug != "" {
+			base = r.effSlug // the name actually published
+		}
 		s, n := base, 2
 		for {
 			if _, taken := sites[s]; !taken {

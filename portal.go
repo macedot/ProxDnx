@@ -85,6 +85,12 @@ const portalHTMLRaw = `<!doctype html>
   .chip.bad{color:#ff6b6b;border-color:#7a3a3a;background:#2a1a1a}
   .chip.warn{color:#ffb86b;border-color:#7a5c2a;background:#2a2318}
   .card.dim{opacity:.55}
+  .editrow{margin-top:10px}
+  .nameinput{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .editactions{display:flex;gap:6px;margin-top:8px}
+  .ebtn{background:#262a30;border:1px solid var(--border);border-radius:6px;color:var(--muted);font:12px system-ui,sans-serif;padding:5px 10px;cursor:pointer}
+  .ebtn:hover{color:var(--text)}
+  .ebtn.save{color:#7ee787;border-color:#2a4a2a}
   footer{padding:0 32px 26px;color:var(--muted);font-size:12px}
   .empty{padding:40px 32px;color:var(--muted)}
 </style>
@@ -115,6 +121,36 @@ const TOKEN=new URLSearchParams(location.search).get("token")||"";
 function api(p){return TOKEN?p+"?token="+encodeURIComponent(TOKEN):p}
 if(TOKEN){document.querySelectorAll("footer a").forEach(a=>{a.href=a.getAttribute("href")+"?token="+encodeURIComponent(TOKEN)})}
 function proto(){return FORCE_HTTPS?"https:":location.protocol}
+// click-to-edit: rename the published URL (service name never changes);
+// auto-refresh pauses while an edit is open
+let EDITING=false;
+function startEdit(card,x,link){
+  if(EDITING)return;EDITING=true;
+  const row=document.createElement("div");row.className="editrow";
+  const inp=document.createElement("input");inp.className="nameinput";
+  inp.value=x.domain.replace(/\.local$/,"");inp.maxLength=63;inp.autocomplete="off";inp.spellcheck=false;
+  row.appendChild(inp);
+  const actions=document.createElement("div");actions.className="editactions";
+  const save=document.createElement("button");save.className="ebtn save";save.textContent="✓ save";
+  const def=document.createElement("button");def.className="ebtn";def.textContent="↺ default";
+  const cancel=document.createElement("button");cancel.className="ebtn";cancel.textContent="✕ discard";
+  save.onclick=async()=>{
+    const r=await fetch(api("/api/names"),{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({slug:x.slug,name:inp.value})});
+    if(!r.ok){const j=await r.json().catch(()=>({}));save.textContent=j.error||"error";return}
+    EDITING=false;load();loadCloudflare();
+  };
+  def.onclick=async()=>{
+    await fetch(api("/api/names"),{method:"DELETE",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({slug:x.slug})});
+    EDITING=false;load();loadCloudflare();
+  };
+  cancel.onclick=()=>{EDITING=false;load();};
+  actions.append(save,def,cancel);
+  link.replaceWith(inp);
+  card.appendChild(actions);
+  inp.focus();
+}
 // provider tabs: Local = app grid + infrastructure; the other tabs appear
 // only when the corresponding sync is enabled (their /api endpoints say so)
 let ACTIVE_TAB="local";
@@ -135,11 +171,17 @@ async function load(){
       const c=document.createElement("div");c.className="card"+(x.stale?" dim":"");
       const flags=(x.stale?'<span class="chip bad">⚠ stale — port closed</span>':'')
         +(x.mismatch?'<span class="chip warn">⚠ name mismatch — page title: "'+esc(x.title||"?")+'"</span>':'');
-      c.innerHTML='<a class="domain" href="'+proto()+'//'+esc(x.domain)+'/">'+esc(x.domain)+'</a>'
-        +'<div class="svc">'+esc(x.service)+'</div>'
-        +(flags?'<div class="chips">'+flags+'</div>':'')
-        +'<div class="chips"><span class="chip">🖥 <b>'+esc(x.name)+'</b></span>'
-        +'<span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span></div>';
+      const link=document.createElement("a");link.className="domain";link.href=proto()+"//"+esc(x.domain)+"/";
+      link.textContent=x.domain;
+      link.title="click to edit the URL name";
+      link.onclick=(ev)=>{ev.preventDefault();startEdit(c,x,link)};
+      c.appendChild(link);
+      const svc=document.createElement("div");svc.className="svc";svc.textContent=x.service;
+      c.appendChild(svc);
+      if(flags){const fl=document.createElement("div");fl.className="chips";fl.innerHTML=flags;c.appendChild(fl)}
+      const ch=document.createElement("div");ch.className="chips";
+      ch.innerHTML='<span class="chip">🖥 <b>'+esc(x.name)+'</b></span><span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span>';
+      c.appendChild(ch);
       g.appendChild(c);
     });
     document.getElementById("n").textContent=d.count;
