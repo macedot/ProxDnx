@@ -358,18 +358,18 @@ func TestRenderCaddyfileCloudflare(t *testing.T) {
 		"immich": {Domain: "immich.local", Service: "Immich", Name: "immich", IP: "10.0.0.5", Port: 2283},
 	}
 	base := Config{BaseURL: "http://127.0.0.1:8008", APIAddr: "127.0.0.1:9973", HTTP: true, Static: true}
-	if renderCaddyfile(sites, base, "horus") != renderCaddyfile(sites, base, "horus") {
+	if renderCaddyfile(sites, base, "horus", "") != renderCaddyfile(sites, base, "horus", "") {
 		t.Fatal("unreachable")
 	}
 	// CF off: zero-value cloudflare fields must not change output
-	off := renderCaddyfile(sites, base, "horus")
+	off := renderCaddyfile(sites, base, "horus", "")
 	if strings.Contains(off, "kraftek.cloud") {
 		t.Fatal("cloudflare hostnames leaked into output with sync disabled")
 	}
 	on := base
 	on.CloudflareToken = "tok"
 	on.CloudflareZone = "kraftek.cloud"
-	got := renderCaddyfile(sites, on, "horus")
+	got := renderCaddyfile(sites, on, "horus", "")
 	if !strings.Contains(got, "http://immich.kraftek.cloud {\n    reverse_proxy 10.0.0.5:2283\n}") {
 		t.Fatalf("public app twin missing:\n%s", got)
 	}

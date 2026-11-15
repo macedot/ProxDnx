@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,26 +71,50 @@ type StaticRoute struct {
 	Secure   bool     `json:"-"` // https upstream with a self-signed cert (skip verify)
 }
 
-// staticRoutes derives the fixed infrastructure entries from the hostname.
-// The ProxMenux upstream is the configured monitor URL itself, so a relocated
-// monitor is followed automatically. The bare <host>.local name is answered
-// but never published by us: the OS avahi daemon already announces it, and
-// re-announcing a host's own name with a different A record triggers an avahi
-// conflict rename.
-func staticRoutes(host, menuxUpstream string) []StaticRoute {
+// upstreamHost rewrites a base URL's host to the LAN IP, keeping scheme and
+// port; an empty lanIP (or an unparseable base) leaves the URL untouched.
+func upstreamHost(base, lanIP string) string {
+	if lanIP == "" {
+		return base
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return base
+	}
+	if p := u.Port(); p != "" {
+		u.Host = net.JoinHostPort(lanIP, p)
+	} else {
+		u.Host = lanIP
+	}
+	return u.String()
+}
+
+// staticRoutes derives the fixed infrastructure entries from the hostname
+// and the host's LAN IP. Upstreams target the LAN IP — not localhost — so
+// the names behave like any LAN service (and stay consistent with how the
+// rest of the network reaches them). The ProxMenux upstream follows the
+// configured monitor URL's scheme/port. The bare <host>.local name is
+// answered but never published by us: the OS avahi daemon already announces
+// it, and re-announcing a host's own name with a different A record
+// triggers an avahi conflict rename.
+func staticRoutes(host, lanIP string, cfg Config) []StaticRoute {
+	ip := lanIP
+	if ip == "" {
+		ip = "127.0.0.1" // no bridge IPv4: caddy is on-host, loopback still works
+	}
 	return []StaticRoute{
 		{
 			Label:    "Proxmox VE",
 			Desc:     "Proxmox web UI",
 			Names:    []string{host + ".local"},
-			Upstream: fmt.Sprintf("https://127.0.0.1:%d", defaultPVEPort),
+			Upstream: fmt.Sprintf("https://%s:%d", ip, defaultPVEPort),
 			Secure:   true,
 		},
 		{
 			Label:    "ProxMenux",
 			Desc:     "ProxMenux Monitor home",
 			Names:    []string{"menux.local", "proxmenux.local", "menux." + host + ".local"},
-			Upstream: menuxUpstream,
+			Upstream: upstreamHost(cfg.BaseURL, ip),
 		},
 	}
 }
@@ -235,7 +260,7 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 			logger.Printf("caddy: existing unmanaged Caddyfile backed up -> %s", bak)
 		}
 	}
-	content := renderCaddyfile(sites, cfg, hostLabel())
+	content := renderCaddyfile(sites, cfg, hostLabel(), hostIP(cfg.Bridge))
 	if strings.TrimSpace(string(cur)) == strings.TrimSpace(content) {
 		logger.Printf("caddy: unchanged (%d sites)", len(sites))
 		return nil
@@ -273,7 +298,7 @@ func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 // global, one https (+ optional plain-http twin) block per app, the static
 // infrastructure blocks, and the portal block on apps.<host>.local only.
 // No timestamps — output must be byte-stable so cycles stay idempotent.
-func renderCaddyfile(sites map[string]Record, cfg Config, host string) string {
+func renderCaddyfile(sites map[string]Record, cfg Config, host, lanIP string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s (ProxDnx)\n", managedBy)
 	// no timestamps in rendered output: keeps cycles idempotent (no rewrite churn)
@@ -308,7 +333,7 @@ func renderCaddyfile(sites map[string]Record, cfg Config, host string) string {
 	// conflict rename); menux*.local + apps.<host>.local are published by
 	// proxdnx-mdns-publish via the alias list below.
 	if cfg.Static {
-		for _, r := range staticRoutes(host, cfg.BaseURL) {
+		for _, r := range staticRoutes(host, lanIP, cfg) {
 			names := make([]string, 0, len(r.Names))
 			for _, n := range r.Names {
 				names = append(names, "https://"+n)
@@ -361,7 +386,7 @@ func renderAliases(sites map[string]Record, cfg Config, hostIP, host string) str
 	}
 	fmt.Fprintf(&ab, "apps.%s.local %s\n", host, hostIP)
 	if cfg.Static {
-		for _, r := range staticRoutes(host, cfg.BaseURL) {
+		for _, r := range staticRoutes(host, hostIP, cfg) {
 			for _, n := range r.Names {
 				if n == host+".local" {
 					continue

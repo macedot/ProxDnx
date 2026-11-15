@@ -56,7 +56,8 @@ func TestHostLabelNeverEmpty(t *testing.T) {
 }
 
 func TestStaticRoutes(t *testing.T) {
-	routes := staticRoutes("horus", "http://127.0.0.1:8008")
+	cfg := Config{BaseURL: "http://127.0.0.1:8008"}
+	routes := staticRoutes("horus", "10.4.2.99", cfg)
 	if len(routes) != 2 {
 		t.Fatalf("want 2 static routes, got %d", len(routes))
 	}
@@ -64,8 +65,16 @@ func TestStaticRoutes(t *testing.T) {
 	if pve.Label != "Proxmox VE" || len(pve.Names) != 1 || pve.Names[0] != "horus.local" {
 		t.Errorf("pve route wrong: %+v", pve)
 	}
-	if pve.Upstream != "https://127.0.0.1:8006" || !pve.Secure {
+	if pve.Upstream != "https://10.4.2.99:8006" || !pve.Secure {
 		t.Errorf("pve upstream wrong: %+v", pve)
+	}
+	if menux.Upstream != "http://10.4.2.99:8008" {
+		t.Errorf("menux upstream wrong: %+v", menux)
+	}
+	// no LAN IP: loopback fallback
+	fb := staticRoutes("horus", "", cfg)
+	if fb[0].Upstream != "https://127.0.0.1:8006" || fb[1].Upstream != "http://127.0.0.1:8008" {
+		t.Errorf("fallback upstreams wrong: %+v", fb)
 	}
 	wantNames := []string{"menux.local", "proxmenux.local", "menux.horus.local"}
 	if len(menux.Names) != 3 {
@@ -76,7 +85,7 @@ func TestStaticRoutes(t *testing.T) {
 			t.Errorf("menux name %d: got %q want %q", i, menux.Names[i], n)
 		}
 	}
-	if menux.Upstream != "http://127.0.0.1:8008" || menux.Secure {
+	if menux.Upstream != "http://10.4.2.99:8008" || menux.Secure {
 		t.Errorf("menux upstream wrong: %+v", menux)
 	}
 }
@@ -135,11 +144,11 @@ http://apps.horus.local {
     reverse_proxy 127.0.0.1:9973
 }
 `
-	got := renderCaddyfile(sites, cfg, "horus")
+	got := renderCaddyfile(sites, cfg, "horus", "")
 	if got != want {
 		t.Fatalf("render mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
-	if renderCaddyfile(sites, cfg, "horus") != got {
+	if renderCaddyfile(sites, cfg, "horus", "") != got {
 		t.Error("renderer is not deterministic")
 	}
 }
@@ -152,7 +161,7 @@ func TestRenderCaddyfileVariants(t *testing.T) {
 
 	noStatic := base
 	noStatic.Static = false
-	got := renderCaddyfile(sites, noStatic, "horus")
+	got := renderCaddyfile(sites, noStatic, "horus", "")
 	if strings.Contains(got, "menux") || strings.Contains(got, "static") {
 		t.Error("static disabled must drop every static block")
 	}
@@ -168,7 +177,7 @@ func TestRenderCaddyfileVariants(t *testing.T) {
 
 	noHTTP := base
 	noHTTP.HTTP = false
-	got = renderCaddyfile(sites, noHTTP, "horus")
+	got = renderCaddyfile(sites, noHTTP, "horus", "")
 	if strings.Contains(got, "\nhttp://") {
 		t.Error("http=false must render no plain-http twins")
 	}
@@ -189,7 +198,7 @@ func TestRenderCaddyfileInjectionProof(t *testing.T) {
 		sites := map[string]Record{
 			"x": {Domain: "x.local", Service: name, IP: "10.0.0.5", Port: 80},
 		}
-		got := renderCaddyfile(sites, Config{Static: false, APIAddr: "127.0.0.1:9973"}, "horus")
+		got := renderCaddyfile(sites, Config{Static: false, APIAddr: "127.0.0.1:9973"}, "horus", "")
 		if strings.Contains(got, name) {
 			t.Errorf("hostile service name leaked into Caddyfile: %q", name)
 		}

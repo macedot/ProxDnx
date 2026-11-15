@@ -137,7 +137,7 @@ func TestRoutesStatic(t *testing.T) {
 	if len(out.Routes) != 2 {
 		t.Fatalf("routes: %d", len(out.Routes))
 	}
-	if out.Routes[0].Upstream != "https://127.0.0.1:8006" {
+	if out.Routes[0].Upstream == "" || !strings.HasSuffix(out.Routes[0].Upstream, ":8006") {
 		t.Errorf("pve upstream: %q", out.Routes[0].Upstream)
 	}
 	found := false

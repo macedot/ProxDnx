@@ -413,7 +413,7 @@ func (a *App) routes() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"enabled": cfg.Static,
-			"routes":  staticRoutes(hostLabel(), cfg.BaseURL),
+			"routes":  staticRoutes(hostLabel(), hostIP(cfg.Bridge), cfg),
 		})
 	})
 	mux.HandleFunc("GET /api/cloudflare", func(w http.ResponseWriter, r *http.Request) {
