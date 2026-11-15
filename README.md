@@ -18,7 +18,7 @@ and automatic reverse proxying, zero manual DNS.
 <br />
 
 <p align="center">
-  <strong>ProxDnx</strong> watches your <a href="https://github.com/MacRimi/ProxMenux"><strong>ProxMenux</strong></a>
+  <strong>ProxDnx</strong> watches your <a href="https://github.com/MacRimi/ProxMenux/"><strong>ProxMenux</strong></a>
   Monitor, learns every running LXC app (name, IP, port), and publishes it as
   a valid <strong>https://&lt;service&gt;.local</strong> domain through Caddy and avahi —
   converging automatically every 60 seconds. Go stdlib only, zero dependencies.
@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | b
 Install a specific release instead of the latest:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | bash -s -- v0.1.8
+curl -fsSL https://raw.githubusercontent.com/macedot/ProxDnx/main/install.sh | bash -s -- v0.2.3
 ```
 
 The installer downloads the release tarball and **sha256-verifies it against
@@ -54,7 +54,7 @@ in-place upgrade — your config is never overwritten.
 >
 > 📄 You can [review the install script](https://github.com/macedot/ProxDnx/blob/main/install.sh) before execution.
 >
-> 🛡️ Requirements: [ProxMenux](https://github.com/MacRimi/ProxMenux) Monitor running, plus the `caddy` and `avahi-daemon` packages.
+> 🛡️ Requirements: [ProxMenux](https://github.com/MacRimi/ProxMenux/) Monitor running, plus the `caddy` and `avahi-daemon` packages.
 >
 > 🐳 Running ProxDnx in a container instead? See [Docker / compose](#docker--compose) — no caddy/avahi needed there.
 
@@ -97,10 +97,13 @@ https://immich.local        https://plex.local        https://adguard-home.local
 
 ### Portal
 
-The portal lists every app as a `<name>.local` card plus the static
-infrastructure entries. Click a card's domain to rename the published URL
-(the service name itself never changes); renames apply to caddy, avahi
-and any future writer within seconds and persist across restarts.
+`https://apps.<host>.local` serves the dashboard. Log in once with the
+generated `api_token` — a 30-day HttpOnly session cookie keeps you signed
+in. Every app appears as a `<name>.local` card plus the static
+infrastructure entries; service URLs always open in a **new tab**.
+**Double-click a card** to edit its published URL (the service name never
+changes) — renames apply to caddy, avahi and any future writer within
+seconds and persist across restarts.
 
 > 🔐 The first time, import Caddy's local root CA on your clients
 > (`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`)
@@ -147,7 +150,8 @@ overwritten on upgrade. A fully annotated copy lives in
 | `force_https` | `false` | Portal always generates `https://` links, even when the dashboard itself is opened over plain http |
 | `probe` | `true` | TCP-probe every candidate port each cycle; dead ports are tagged `stale` (kept visible on the portal, excluded from caddy/avahi) and the UI title is checked against the registered name |
 | `autofix` | `false` | Opt-in self-healing: when `probe` tags a registration stale or mismatched, sweep well-known ports on the guest, identify the real app by its UI title, and correct the ProxMenux registration through its own API (`PUT /api/vms/<vmid>/apps/<id>`). Renames demote the registration to link-only. Max 2 attempts per registration. Requires `probe` |
-| `api_token` | *(auto-generated on first start)* | API/portal auth is on by default — like the Proxmox UI. On first start a random token is generated, stored in the config, and logged. **Browsers**: open the portal and paste the token into the login form — a 30-day HttpOnly session cookie is set (the token never touches a URL). **API clients**: `Authorization: Bearer <token>` or the `X-API-Token` header. `/healthz` stays open. Constant-time compare. Set `api_token: "none"` to run an open API (loopback deployments) |
+| `scan` | `false` | Force fresh discovery POSTs to the monitor every cycle instead of trusting its cache (also `-scan`) |
+| `api_token` | *(auto-generated on first start)* | API/portal auth is on by default — like the Proxmox UI. On first start a random token is generated, stored in the config, and logged. **Browsers**: open the portal and paste the token into the login form — a 30-day HttpOnly session cookie is set (the token never touches a URL). **API clients**: `Authorization: Bearer *** or the `X-API-Token` header. `/healthz` stays open. Constant-time compare. Set `api_token: "none"` to run an open API (loopback deployments) |
 | `api_addr` | `127.0.0.1:9973` | API listen address. Loopback by default; binding non-loopback logs a loud warning — pair it with `api_token` |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |
@@ -186,6 +190,23 @@ journalctl -u proxdnx -n 50
 # Restart after a config change
 systemctl restart proxdnx
 ```
+
+---
+
+## 🔧 Dependencies
+
+The following Debian packages must be present on the Proxmox host — the
+installer checks for them, and `proxdnx.service` `Requires=` caddy and
+avahi-daemon, so the daemon will not start without them:
+
+| Package | Purpose |
+|---|---|
+| `caddy` | Reverse proxy + internal TLS for every `<service>.local` |
+| `avahi-daemon` | mDNS service files and `<service>.local` A records (`avahi-publish`) |
+| `wget` or `curl` | Downloads the installer payload |
+
+Go 1.24+ is only needed to build from source — releases ship static
+binaries for amd64 and arm64.
 
 ---
 
