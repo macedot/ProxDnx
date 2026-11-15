@@ -143,6 +143,8 @@ func TestAdguardSyncAddsPublishedNames(t *testing.T) {
 		"proxmenux.local", "sonarr.local",
 	}
 	got := keys(f.rewrites)
+	// adguardNames iterates a set — order is unspecified; compare sorted
+	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("rewrites = [%s], want [%s]", strings.Join(got, ","), strings.Join(want, ","))
 	}
