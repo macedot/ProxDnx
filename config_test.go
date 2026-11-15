@@ -88,10 +88,6 @@ func TestLoadConfig(t *testing.T) {
 	if c.APIAddr != "127.0.0.1:1234" || c.LogFile != "/tmp/x.log" {
 		t.Errorf("addrs not merged: %+v", c)
 	}
-	if len(c.CloudflareOnly) != 2 || c.CloudflareOnly[0] != "immich" || c.CloudflareOnly[1] != "sonarr" {
-		t.Errorf("cloudflare_only not parsed: %+v", c.CloudflareOnly)
-	}
-
 	for _, bad := range []string{"interval: notaduration", "caddy: notabool"} {
 		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
@@ -155,7 +151,6 @@ func TestApplyEnv(t *testing.T) {
 	t.Setenv("PROXDNX_API_TOKEN", "webtok")
 	t.Setenv("PROXDNX_API_ADDR", "0.0.0.0:9973")
 	t.Setenv("PROXDNX_BRIDGE", "vmbr9")
-	t.Setenv("PROXDNX_CLOUDFLARE_ONLY", "immich, sonarr")
 	c = defaultConfig()
 	if err := applyEnv(&c); err != nil {
 		t.Fatalf("applyEnv: %v", err)
@@ -165,10 +160,6 @@ func TestApplyEnv(t *testing.T) {
 		c.APIToken != "webtok" || c.APIAddr != "0.0.0.0:9973" || c.Bridge != "vmbr9" {
 		t.Errorf("PROXDNX_* env not applied: %+v", c)
 	}
-	if len(c.CloudflareOnly) != 2 || c.CloudflareOnly[0] != "immich" || c.CloudflareOnly[1] != "sonarr" {
-		t.Errorf("PROXDNX_CLOUDFLARE_ONLY not applied: %+v", c.CloudflareOnly)
-	}
-
 	// malformed values fail loudly instead of being ignored
 	t.Setenv("PROXDNX_INTERVAL", "notaduration")
 	c = defaultConfig()
@@ -218,27 +209,6 @@ func TestValidate(t *testing.T) {
 		{"api_addr no port", func(c *Config) { c.APIAddr = "127.0.0.1" }},
 		{"interval zero", func(c *Config) { c.Interval = 0 }},
 		{"interval negative", func(c *Config) { c.Interval = -5 * time.Second }},
-		{"cloudflare token without zone", func(c *Config) { c.CloudflareToken = "tok" }},
-		{"cloudflare with open api", func(c *Config) {
-			c.CloudflareToken = "tok"
-			c.CloudflareZone = "example.com"
-			c.APIToken = apiTokenOff
-		}},
-		{"cloudflare without http twin", func(c *Config) {
-			c.CloudflareToken = "tok"
-			c.CloudflareZone = "example.com"
-			c.HTTP = false
-		}},
-		{"cloudflare tunnel id not uuid", func(c *Config) {
-			c.CloudflareToken = "tok"
-			c.CloudflareZone = "example.com"
-			c.CloudflareTunnelID = "../../wat"
-		}},
-		{"cloudflare only bad slug", func(c *Config) {
-			c.CloudflareToken = "tok"
-			c.CloudflareZone = "example.com"
-			c.CloudflareOnly = []string{"immich", "not ok!"}
-		}},
 	}
 	for _, tc := range cases {
 		c := defaultConfig()
@@ -253,8 +223,7 @@ func TestValidate(t *testing.T) {
 	ok.Bridge = "vmbr0"
 	ok.APIAddr = "127.0.0.1:9973"
 	ok.ForceHTTPS = true
-	ok.CloudflareToken = "tok"
-	ok.CloudflareZone = "example.com"
+	ok.APIToken = "tok"
 	if err := ok.validate(); err != nil {
 		t.Errorf("valid config rejected: %v", err)
 	}

@@ -75,13 +75,8 @@ type Config struct {
 	APIToken   string // require this token on API/portal requests ("" = open)
 	APIAddr    string
 
-	CloudflareToken    string   // Cloudflare API token; "" = tunnel sync off
-	CloudflareZone     string   // public zone (e.g. example.com)
-	CloudflareTunnelID string   // tunnel UUID; "" = auto-discover the first non-deleted tunnel
-	CloudflarePrune    bool     // prune managed DNS records/ingress that are no longer published
-	CloudflareOnly     []string // allowlist: only these slugs get public routes (empty = every app)
-	LogFile            string
-	Path               string // resolved config file path
+	LogFile string
+	Path    string // resolved config file path
 
 	created bool // config file was bootstrapped this run
 	once    bool // -once: run a single cycle and exit
@@ -122,7 +117,6 @@ type App struct {
 	mu        sync.Mutex
 	domains   []Record
 	stats     CycleStats
-	cf        CloudflareStatus
 	names     map[string]string // slug -> renamed slug (user-edited URLs)
 	namesPath string
 	cycleBusy atomic.Bool
@@ -308,31 +302,6 @@ func (c Config) validate() error {
 	// "interval: 0s" must refuse startup instead of crash-looping.
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval: must be positive (got %s)", c.Interval)
-	}
-	// Cloudflare tunnel sync publishes <name>.<zone>: a zone is required
-	// when the provider is on.
-	if c.CloudflareToken != "" && strings.Trim(strings.TrimRight(c.CloudflareZone, "."), ".") == "" {
-		return fmt.Errorf("cloudflare_zone: required when cloudflare_token is set (apps publish <name>.<zone>)")
-	}
-	if c.CloudflareToken != "" {
-		// the portal becomes apps.<host>.<zone> — publicly reachable, so an
-		// open API must refuse to start rather than publish the inventory.
-		if c.APIToken == apiTokenOff {
-			return fmt.Errorf("api_token: %q refuses to start when cloudflare is enabled — apps.<host>.%s would be a public, open dashboard", apiTokenOff, c.CloudflareZone)
-		}
-		// tunnel ingress routes public names to caddy's plain-http twin
-		// (cfIngressTarget hardcodes :80): without it every public route 404s.
-		if !c.HTTP {
-			return fmt.Errorf("http: must be true when cloudflare is set — public names route to caddy's plain-http twin on :80")
-		}
-		if c.CloudflareTunnelID != "" && !tunnelIDRe.MatchString(c.CloudflareTunnelID) {
-			return fmt.Errorf("cloudflare_tunnel_id: not a tunnel UUID (%q)", c.CloudflareTunnelID)
-		}
-		for _, s := range c.CloudflareOnly {
-			if !nameRe.MatchString(s) {
-				return fmt.Errorf("cloudflare_only: invalid slug %q (letters, digits and dashes only)", s)
-			}
-		}
 	}
 	return nil
 }
@@ -622,34 +591,6 @@ func (a *App) routes() http.Handler {
 			"routes":  staticRoutes(hostLabel(), hostIP(cfg.Bridge), cfg),
 		})
 	})
-	mux.HandleFunc("GET /api/cloudflare", func(w http.ResponseWriter, r *http.Request) {
-		a.mu.Lock()
-		st := a.cf
-		domains := a.domains
-		cfg := a.cfg
-		a.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if !cfEnabled(cfg) {
-			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": false})
-			return
-		}
-		type route struct {
-			Hostname string `json:"hostname"`
-			URL      string `json:"url"`
-		}
-		names := cfPublicNames(dedupeSites(domains), cfg)
-		routes := make([]route, 0, len(names))
-		for _, n := range names {
-			routes = append(routes, route{Hostname: n, URL: "https://" + n})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"enabled":   true,
-			"zone":      strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."),
-			"count":     len(routes),
-			"routes":    routes,
-			"last_sync": st,
-		})
-	})
 	mux.HandleFunc("POST /api/names", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Slug string `json:"slug"`
@@ -750,7 +691,7 @@ func (a *App) routes() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "ok")
 	})
-	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /api/cloudflare, /healthz)", a.cfg.APIAddr)
+	a.log.Printf("api: listening on http://%s (GET /api/domains, /api/static, /api/status, /healthz)", a.cfg.APIAddr)
 	if a.cfg.APIToken != "" {
 		a.log.Printf("api: token auth ENABLED (healthz exempt)")
 	}
@@ -841,31 +782,6 @@ func (a *App) cycle(ctx context.Context) error {
 			a.log.Printf("avahi: apply failed: %v", err)
 		}
 	}
-	if cfEnabled(a.cfg) {
-		st := CloudflareStatus{Enabled: true, At: time.Now()}
-		if answer := hostIP(a.cfg.Bridge); answer == "" {
-			st.Skipped = "no host IPv4 on " + a.cfg.Bridge
-			a.log.Printf("cloudflare: %s — sync skipped", st.Skipped)
-		} else {
-			s, err := cfSync(publish, answer, a.cfg)
-			st.Zone = s.Zone
-			st.TunnelID = s.TunnelID
-			st.Count, st.Added, st.Updated, st.Removed, st.Conflicts = s.Count, s.Added, s.Updated, s.Removed, s.Conflicts
-			if err != nil {
-				st.Error = err.Error()
-				a.log.Printf("cloudflare: sync failed: %v", err)
-			} else {
-				a.log.Printf("cloudflare: synced %d public names via tunnel %.8s… (added %d, updated %d, removed %d, conflicts %d)",
-					st.Count, st.TunnelID, len(st.Added), len(st.Updated), len(st.Removed), len(st.Conflicts))
-				if len(st.Conflicts) > 0 {
-					a.log.Printf("cloudflare: conflicts (user-owned records left untouched): %s", strings.Join(st.Conflicts, ", "))
-				}
-			}
-		}
-		a.mu.Lock()
-		a.cf = st
-		a.mu.Unlock()
-	}
 
 	stats := CycleStats{
 		At: start, Kept: len(kept), Added: len(added), Removed: len(removed),
@@ -954,12 +870,6 @@ func main() {
 	}
 	logger := setupLogging(cfg.LogFile)
 	ensureAPIToken(&cfg, logger.Printf)
-	// belt and braces beyond validate(): the cloudflare sync publishes
-	// apps.<host>.<zone> publicly, so no effective token (explicit "none" or
-	// a failed generation) may ever pair with it.
-	if cfEnabled(cfg) && cfg.APIToken == "" {
-		fatalf("cloudflare sync is on but the API/portal has no token — refusing to expose apps.<host>.%s publicly; set api_token", strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."))
-	}
 	if host, _, splitErr := net.SplitHostPort(cfg.APIAddr); splitErr == nil && !loopbackHost(host) {
 		if cfg.APIToken != "" {
 			logger.Printf("api binds %s — token auth is enabled", cfg.APIAddr)
@@ -970,8 +880,8 @@ func main() {
 	if cfg.created {
 		logger.Printf("config: bootstrapped %s with defaults (edit and restart to apply)", cfg.Path)
 	}
-	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v cloudflare=%v api_auth=%v",
-		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfEnabled(cfg), cfg.APIToken != "")
+	logger.Printf("proxdnx starting: config=%s url=%s bridge=%s network=%q interval=%s caddy=%v avahi=%v http=%v static=%v force_https=%v probe=%v autofix=%v api_auth=%v",
+		cfg.Path, cfg.BaseURL, cfg.Bridge, cfg.Network, cfg.Interval, cfg.Caddy, cfg.Avahi, cfg.HTTP, cfg.Static, cfg.ForceHTTPS, cfg.Probe, cfg.AutoFix, cfg.APIToken != "")
 
 	if cfg.Caddy {
 		if err := requireActive("caddy"); err != nil {

@@ -65,9 +65,7 @@ scan: false
 # generated on first start, stored in this file and printed to the startup
 # log. Browsers log in via the form and keep a 30-day HttpOnly session
 # cookie; API clients send Authorization: Bearer or X-API-Token
-# (/healthz stays open). Set "none" to run an open API (loopback
-# deployments — refused when cloudflare is enabled: the portal would be
-# public).
+# (/healthz stays open). Set "none" to run an open API (loopback).
 api_token: ""
 
 # API listen address. 127.0.0.1 is the safe default; a non-loopback bind
@@ -76,18 +74,3 @@ api_addr: 127.0.0.1:9973
 
 # Log file (mirrored to stdout/journald).
 log_file: /var/log/proxdnx/proxdnx.log
-
-# ---- DNS provider ------------------------------------------------------
-# Cloudflare Tunnel (public): publishes apps as <name>.<zone> via a proxied
-# CNAME to the tunnel + an ingress rule -> this host's caddy plain-http
-# twin. zone is REQUIRED when cloudflare_token is set; infrastructure
-# names are never published.
-cloudflare_token: ""       # API token: Account:Read + Zone DNS:Edit + Tunnel edit
-cloudflare_zone: ""        # e.g. example.com  ->  sonarr.example.com
-cloudflare_tunnel_id: ""   # empty = first non-deleted tunnel in the account
-cloudflare_prune: false    # remove records/rules of apps that disappeared
-# Public-exposure allowlist: comma-separated slugs. When set, ONLY these
-# apps get public <name>.<zone> routes (the portal stays public); empty
-# publishes every app — think twice before shipping your torrent client
-# or Portainer to the internet.
-cloudflare_only: ""        # e.g. "immich,jellyfin"

@@ -111,7 +111,7 @@ func loadConfig(path string, c *Config) (bool, error) {
 				return true, fmt.Errorf("%s: bad duration %q: %v", k, v, err)
 			}
 			c.Interval = d
-		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix", "cloudflare_prune":
+		case "caddy", "avahi", "http", "scan", "static", "force_https", "probe", "autofix":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return true, fmt.Errorf("%s: bad bool %q: %v", k, v, err)
@@ -131,8 +131,6 @@ func loadConfig(path string, c *Config) (bool, error) {
 				c.Probe = b
 			case "autofix":
 				c.AutoFix = b
-			case "cloudflare_prune":
-				c.CloudflarePrune = b
 			default:
 				c.Scan = b
 			}
@@ -140,14 +138,6 @@ func loadConfig(path string, c *Config) (bool, error) {
 			c.APIAddr = v
 		case "api_token":
 			c.APIToken = v
-		case "cloudflare_token":
-			c.CloudflareToken = v
-		case "cloudflare_zone":
-			c.CloudflareZone = v
-		case "cloudflare_tunnel_id":
-			c.CloudflareTunnelID = v
-		case "cloudflare_only":
-			c.CloudflareOnly = parseNameList(v)
 		case "log_file":
 			c.LogFile = v
 		default:
@@ -183,11 +173,6 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "scan: %s\n", strconv.FormatBool(c.Scan))
 	fmt.Fprintf(&b, "api_token: %s\n", yamlValue(c.APIToken))
 	fmt.Fprintf(&b, "api_addr: %s\n", yamlValue(c.APIAddr))
-	fmt.Fprintf(&b, "cloudflare_token: %s\n", yamlValue(c.CloudflareToken))
-	fmt.Fprintf(&b, "cloudflare_zone: %s\n", yamlValue(c.CloudflareZone))
-	fmt.Fprintf(&b, "cloudflare_tunnel_id: %s\n", yamlValue(c.CloudflareTunnelID))
-	fmt.Fprintf(&b, "cloudflare_only: %s\n", yamlValue(strings.Join(c.CloudflareOnly, ",")))
-	fmt.Fprintf(&b, "cloudflare_prune: %s\n", strconv.FormatBool(c.CloudflarePrune))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
 	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -261,11 +246,6 @@ func applyEnv(c *Config) error {
 		{"PROXDNX_SCAN", b(func(c *Config, v bool) { c.Scan = v })},
 		{"PROXDNX_API_ADDR", str(func(c *Config, v string) { c.APIAddr = v })},
 		{"PROXDNX_API_TOKEN", str(func(c *Config, v string) { c.APIToken = v })},
-		{"PROXDNX_CLOUDFLARE_TOKEN", str(func(c *Config, v string) { c.CloudflareToken = v })},
-		{"PROXDNX_CLOUDFLARE_ZONE", str(func(c *Config, v string) { c.CloudflareZone = v })},
-		{"PROXDNX_CLOUDFLARE_TUNNEL_ID", str(func(c *Config, v string) { c.CloudflareTunnelID = v })},
-		{"PROXDNX_CLOUDFLARE_ONLY", str(func(c *Config, v string) { c.CloudflareOnly = parseNameList(v) })},
-		{"PROXDNX_CLOUDFLARE_PRUNE", b(func(c *Config, v bool) { c.CloudflarePrune = v })},
 		{"PROXDNX_LOG_FILE", str(func(c *Config, v string) { c.LogFile = v })},
 	}
 	// legacy aliases first: the PROXDNX_* bindings below override on conflict

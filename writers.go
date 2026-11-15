@@ -360,11 +360,6 @@ func renderCaddyfile(sites map[string]Record, cfg Config, host, lanIP string) st
 			// plain http twin: serves content on :80 instead of redirecting
 			fmt.Fprintf(&b, "\nhttp://%s.local {\n    reverse_proxy %s:%d\n}\n", s, r.IP, r.Port)
 		}
-		if cfEnabled(cfg) {
-			// public hostname via Cloudflare Tunnel: cloudflared always hits
-			// the plain-http twin (edge terminates TLS), caddy routes by Host
-			fmt.Fprintf(&b, "\nhttp://%s.%s {\n    reverse_proxy %s:%d\n}\n", s, strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."), r.IP, r.Port)
-		}
 	}
 	// static infrastructure entries: <host>.local -> Proxmox UI, menux*.local
 	// -> ProxMenux — reverse-proxied like any app, no redirect. <host>.local is
@@ -398,13 +393,10 @@ func renderCaddyfile(sites map[string]Record, cfg Config, host, lanIP string) st
 		}
 	}
 	// portal: apps dashboard served by this daemon's API server — only on
-	// apps.<host>.local (plus the public twin when the Cloudflare sync runs).
+	// apps.<host>.local.
 	fmt.Fprintf(&b, "\nhttps://apps.%s.local {\n    reverse_proxy %s\n}\n", host, cfg.APIAddr)
 	if cfg.HTTP {
 		fmt.Fprintf(&b, "\nhttp://apps.%s.local {\n    reverse_proxy %s\n}\n", host, cfg.APIAddr)
-	}
-	if cfEnabled(cfg) {
-		fmt.Fprintf(&b, "\nhttp://apps.%s.%s {\n    reverse_proxy %s\n}\n", host, strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."), cfg.APIAddr)
 	}
 	return b.String()
 }

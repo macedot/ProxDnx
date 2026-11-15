@@ -266,14 +266,6 @@ scan: false
 api_token: ""
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log
-# DNS provider (publishes <name>.<zone> publicly via a Cloudflare Tunnel;
-# zone REQUIRED when a token is set). cloudflare_only: comma-separated
-# allowlist of slugs that get public routes (empty = every app).
-cloudflare_token: ""
-cloudflare_zone: ""
-cloudflare_tunnel_id: ""
-cloudflare_only: ""
-cloudflare_prune: false
 EOF
     )
     chmod 600 "$CONF"
