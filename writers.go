@@ -125,6 +125,37 @@ type site struct {
 	Rec  Record
 }
 
+// reservedNames lists slugs that collide with static-infrastructure names:
+// <host>.local (Proxmox UI) and menux*/proxmenux.local (ProxMenux). A site
+// carrying one of these labels would render a duplicate site address, fail
+// `caddy validate`, and take publication of EVERY app down with it — so such
+// sites are skipped and renames into them refused. Only meaningful while the
+// static entries are rendered (static: true).
+func reservedNames(cfg Config) map[string]bool {
+	if !cfg.Static {
+		return nil
+	}
+	return map[string]bool{hostLabel(): true, "menux": true, "proxmenux": true}
+}
+
+// dropReserved removes reserved-colliding sites in place and returns the
+// names it dropped, so the caller can log what was skipped.
+func dropReserved(sites map[string]Record, cfg Config) []string {
+	res := reservedNames(cfg)
+	if len(res) == 0 {
+		return nil
+	}
+	var dropped []string
+	for s := range sites {
+		if res[s] {
+			delete(sites, s)
+			dropped = append(dropped, s)
+		}
+	}
+	sort.Strings(dropped)
+	return dropped
+}
+
 // dedupeSites: one site per slug (slugified service name); first record wins,
 // colliding slugs get -2, -3... suffixes.
 func dedupeSites(recs []Record) map[string]Record {
@@ -255,6 +286,9 @@ func hasManagedMarker(content string) bool {
 // apps.<host>.local, proxying to this daemon's API.
 func applyCaddy(logger *log.Logger, recs []Record, cfg Config) error {
 	sites := dedupeSites(recs)
+	for _, s := range dropReserved(sites, cfg) {
+		logger.Printf("caddy: skipping %s.local — name reserved for static infrastructure (rename the app or its registration)", s)
+	}
 	if len(sites) == 0 && !cfg.Static {
 		logger.Printf("caddy: no records and static entries disabled — Caddyfile left untouched")
 		return nil
@@ -421,6 +455,7 @@ func countAliases(content string) int {
 // <name>.local into A records on the host IP.
 func applyAvahi(logger *log.Logger, recs []Record, cfg Config) error {
 	sites := dedupeSites(recs)
+	dropReserved(sites, cfg) // mirror applyCaddy: never publish a name caddy will not serve
 	if len(sites) == 0 && !cfg.Static {
 		logger.Printf("avahi: no records and static entries disabled — nothing written")
 		return nil

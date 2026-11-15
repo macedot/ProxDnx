@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,11 @@ import (
 // cfAPIBase is the Cloudflare v4 API root. Package var so tests can point it
 // at a httptest fake.
 var cfAPIBase = "https://api.cloudflare.com/client/v4"
+
+// tunnelIDRe matches a Cloudflare tunnel UUID. The configured id flows into
+// API URL paths — anything that is not a plain UUID is rejected at config
+// validation so no path trickery can ride along.
+var tunnelIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // cfDNSMarker stamps records created by the sync.
 const cfDNSMarker = "managed by ProxDnx"
@@ -61,12 +67,22 @@ func cfEnabled(cfg Config) bool {
 }
 
 // cfPublicNames enumerates the public hostnames: <slug>.<zone> per app plus
-// apps.<host>.<zone> for the portal.
+// apps.<host>.<zone> for the portal. cloudflare_only, when set, restricts
+// the app routes to the listed slugs — publishing every guest UI (torrent
+// clients, Portainer, …) to the internet is never what a slip of the config
+// should do. The portal name is always present.
 func cfPublicNames(sites map[string]Record, cfg Config) []string {
 	host := hostLabel()
 	zone := strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), ".")
+	allow := map[string]bool{}
+	for _, s := range cfg.CloudflareOnly {
+		allow[s] = true
+	}
 	set := map[string]bool{}
 	for s := range sites {
+		if len(allow) > 0 && !allow[s] {
+			continue
+		}
 		set[s+"."+zone] = true
 	}
 	set["apps."+host+"."+zone] = true

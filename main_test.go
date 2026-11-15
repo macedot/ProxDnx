@@ -403,6 +403,10 @@ func TestNamesAPI(t *testing.T) {
 	if resp, _ = post(`{"slug":"sonarr","name":"not ok!"}`); resp.StatusCode != 400 {
 		t.Errorf("invalid name must 400, got %d", resp.StatusCode)
 	}
+	// reserved static-infrastructure name (newTestApp runs with static on)
+	if resp, _ = post(`{"slug":"sonarr","name":"menux"}`); resp.StatusCode != 409 {
+		t.Errorf("reserved name must 409, got %d", resp.StatusCode)
+	}
 	// collision with another app's slug
 	if resp, _ = post(`{"slug":"sonarr","name":"immich"}`); resp.StatusCode != 409 {
 		t.Errorf("collision must 409, got %d", resp.StatusCode)
@@ -613,6 +617,12 @@ func TestSecureHeaders(t *testing.T) {
 	if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") {
 		t.Error("missing CSP")
 	}
+	// the token login form POSTs to /api/login: form-action must allow the
+	// same origin ('none' blocks the submission in every enforcing browser
+	// and locks users out of the dashboard)
+	if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "form-action 'self'") {
+		t.Errorf("form-action must be 'self' for the login form, got %q", resp.Header.Get("Content-Security-Policy"))
+	}
 }
 
 func TestSetStats(t *testing.T) {
@@ -664,6 +674,15 @@ func TestLoadEffectiveConfig(t *testing.T) {
 	os.Args = []string{"proxdnx", "--config", path}
 	if _, err = loadEffectiveConfig(); err == nil {
 		t.Error("invalid bridge must refuse startup")
+	}
+
+	// malformed -interval must refuse startup, not silently use the default
+	if err := os.WriteFile(path, []byte("url: http://10.1.1.1:8008\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Args = []string{"proxdnx", "--config", path, "-interval", "garbage"}
+	if _, err = loadEffectiveConfig(); err == nil || !strings.Contains(err.Error(), "interval") {
+		t.Errorf("bad --interval must fail loudly: %v", err)
 	}
 }
 
@@ -731,6 +750,18 @@ func TestSetupLogging(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(data), "hello-log") {
 		t.Errorf("log file not written: %v %q", err, data)
+	}
+	// the startup log carries the generated api_token: root-only, always
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("log file must be 0600: %v (err=%v)", fi.Mode().Perm(), err)
+	}
+	// a pre-existing wider-mode log must be tightened, not appended to as-is
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupLogging(path)
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Errorf("pre-existing 0644 log must be tightened to 0600, got %v", fi.Mode().Perm())
 	}
 	// unwritable path: must not panic, returns stdout-only logger
 	if lg := setupLogging(filepath.Join(dir, "missing-dir", "x.log")); lg == nil {

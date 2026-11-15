@@ -99,10 +99,13 @@ https://immich.local        https://plex.local        https://adguard-home.local
 
 The portal has a **Local** tab (the `*.local` names above) and, when
 configured, a **Cloudflare** tab: setting `cloudflare_token` +
-`cloudflare_zone` publishes every app publicly as `<name>.<zone>` through a
+`cloudflare_zone` publishes apps publicly as `<name>.<zone>` through a
 Cloudflare Tunnel (proxied CNAME + ingress rule → caddy), with the portal at
 `apps.<host>.<zone>`. The zone is **required** for the provider;
-infrastructure names are never exposed publicly.
+infrastructure names are never exposed publicly. `cloudflare_only` (comma-
+separated slugs) narrows what goes public — with it set, only the listed
+apps get routes; an open `api_token: none` is refused while the provider
+is enabled, since the portal itself would be public.
 
 The sync reconciles every cycle (create missing, fix drift, prune on
 `cloudflare_prune: true`) and never touches records it doesn't own — a
@@ -156,7 +159,8 @@ overwritten on upgrade. A fully annotated copy lives in
 | `autofix` | `false` | Opt-in self-healing: when `probe` tags a registration stale or mismatched, sweep well-known ports on the guest, identify the real app by its UI title, and correct the ProxMenux registration through its own API (`PUT /api/vms/<vmid>/apps/<id>`). Renames demote the registration to link-only. Max 2 attempts per registration. Requires `probe` |
 | `api_token` | *(auto-generated on first start)* | API/portal auth is on by default — like the Proxmox UI. On first start a random token is generated, stored in the config, and logged. **Browsers**: open the portal and paste the token into the login form — a 30-day HttpOnly session cookie is set (the token never touches a URL). **API clients**: `Authorization: Bearer <token>` or the `X-API-Token` header. `/healthz` stays open. Constant-time compare. Set `api_token: "none"` to run an open API (loopback deployments) |
 | `api_addr` | `127.0.0.1:9973` | API listen address. Loopback by default; binding non-loopback logs a loud warning — pair it with `api_token` |
-| `cloudflare_token` / `cloudflare_zone` / `cloudflare_tunnel_id` | *(empty)* | **DNS provider: Cloudflare Tunnel** — setting `cloudflare_token` + `cloudflare_zone` (required pair) publishes every app publicly as `<name>.<zone>`: a proxied CNAME to the tunnel plus an ingress rule routing it to caddy. The portal itself becomes `apps.<host>.<zone>`; infrastructure names are never published. `cloudflare_tunnel_id` empty = first non-deleted tunnel; `cloudflare_prune` removes stale managed records/rules; user-owned records claiming a desired name are reported as conflicts, never touched |
+| `cloudflare_token` / `cloudflare_zone` / `cloudflare_tunnel_id` | *(empty)* | **DNS provider: Cloudflare Tunnel** — setting `cloudflare_token` + `cloudflare_zone` (required pair) publishes apps publicly as `<name>.<zone>`: a proxied CNAME to the tunnel plus an ingress rule routing it to caddy. The portal itself becomes `apps.<host>.<zone>`; infrastructure names are never published. `cloudflare_tunnel_id` empty = first non-deleted tunnel; `cloudflare_prune` removes stale managed records/rules; user-owned records claiming a desired name are reported as conflicts, never touched |
+| `cloudflare_only` | *(empty)* | Public-exposure allowlist for the Cloudflare provider: comma-separated slugs (also `PROXDNX_CLOUDFLARE_ONLY`). When set, only these apps get public `<name>.<zone>` routes — the portal stays public. Empty publishes **every** app; a public torrent client is nobody's friend |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |
 
@@ -172,7 +176,8 @@ can be driven entirely without a config file (docker compose, systemd
 `PROXDNX_FORCE_HTTPS`, `PROXDNX_PROBE`, `PROXDNX_AUTOFIX`, `PROXDNX_SCAN`,
 `PROXDNX_API_ADDR`, `PROXDNX_API_TOKEN`, `PROXDNX_LOG_FILE`,
 `PROXDNX_CLOUDFLARE_TOKEN`, `PROXDNX_CLOUDFLARE_ZONE`,
-`PROXDNX_CLOUDFLARE_TUNNEL_ID`, `PROXDNX_CLOUDFLARE_PRUNE`
+`PROXDNX_CLOUDFLARE_TUNNEL_ID`, `PROXDNX_CLOUDFLARE_ONLY`,
+`PROXDNX_CLOUDFLARE_PRUNE`
 
 Precedence: CLI flags > `PROXDNX_*` env > legacy `PROXMENUX_*` env (aliases
 for url/token/user/pass/totp) > config file > built-in defaults. Malformed
@@ -252,15 +257,19 @@ are exercised with `httptest`.
 
 Security posture: renderer labels are slug-restricted (`[a-z0-9-]`), the
 config is validated at startup (URL scheme, interface name, CIDR, listen
-address, positive interval), the API server enforces read/header/idle
-timeouts, `nosniff` / `no-store`, `X-Frame-Options: DENY` and a restrictive
-CSP, optional constant-time token auth protects every route (`/healthz`
-exempt), file writes are O_EXCL with pid-unique temp names (config included —
-it holds the monitor token/password), the identity probes cap redirects and
-refuse loopback/link-local targets (SSRF guard), the monitor client caps
-response bodies at 8 MiB and re-authenticates once on stale-session 401s,
-and the installer sha256-verifies downloads against the release
-`checksums.txt`.
+address, positive interval, cloudflare pairings — zone required, open
+`api_token` refused, tunnel IDs must be UUIDs), the API server enforces
+read/header/idle timeouts, `nosniff` / `no-store`, `X-Frame-Options: DENY`
+and a restrictive CSP, token auth (hash-then-compare, length-leak-free)
+protects every route (`/healthz` exempt) with the token logged only into a
+root-only 0600 log file, file writes are O_EXCL with pid-unique temp names
+(config included — it holds the monitor token/password), the identity probes
+cap redirects and refuse loopback/link-local targets (SSRF guard), the
+monitor client caps response bodies at 8 MiB and re-authenticates once on
+stale-session 401s, slugs colliding with static-infrastructure names are
+reserved (renames refused, sites skipped — one bad name can no longer fail
+the whole Caddyfile), and the installer sha256-verifies downloads against
+the release `checksums.txt` — failing closed when they are missing.
 
 ---
 

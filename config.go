@@ -67,6 +67,19 @@ func yamlValue(s string) string {
 	return s
 }
 
+// parseNameList splits a comma-separated slug list (flat-YAML/env friendly):
+// entries are trimmed and lower-cased, empties dropped; "" yields nil.
+func parseNameList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // loadConfig merges a config file into c; returns false if the file is absent.
 func loadConfig(path string, c *Config) (bool, error) {
 	data, err := os.ReadFile(path)
@@ -133,6 +146,8 @@ func loadConfig(path string, c *Config) (bool, error) {
 			c.CloudflareZone = v
 		case "cloudflare_tunnel_id":
 			c.CloudflareTunnelID = v
+		case "cloudflare_only":
+			c.CloudflareOnly = parseNameList(v)
 		case "log_file":
 			c.LogFile = v
 		default:
@@ -171,6 +186,7 @@ func saveConfig(path string, c *Config) error {
 	fmt.Fprintf(&b, "cloudflare_token: %s\n", yamlValue(c.CloudflareToken))
 	fmt.Fprintf(&b, "cloudflare_zone: %s\n", yamlValue(c.CloudflareZone))
 	fmt.Fprintf(&b, "cloudflare_tunnel_id: %s\n", yamlValue(c.CloudflareTunnelID))
+	fmt.Fprintf(&b, "cloudflare_only: %s\n", yamlValue(strings.Join(c.CloudflareOnly, ",")))
 	fmt.Fprintf(&b, "cloudflare_prune: %s\n", strconv.FormatBool(c.CloudflarePrune))
 	fmt.Fprintf(&b, "log_file: %s\n", yamlValue(c.LogFile))
 	tmp := fmt.Sprintf("%s.tmp-proxdnx-%d", path, os.Getpid())
@@ -248,6 +264,7 @@ func applyEnv(c *Config) error {
 		{"PROXDNX_CLOUDFLARE_TOKEN", str(func(c *Config, v string) { c.CloudflareToken = v })},
 		{"PROXDNX_CLOUDFLARE_ZONE", str(func(c *Config, v string) { c.CloudflareZone = v })},
 		{"PROXDNX_CLOUDFLARE_TUNNEL_ID", str(func(c *Config, v string) { c.CloudflareTunnelID = v })},
+		{"PROXDNX_CLOUDFLARE_ONLY", str(func(c *Config, v string) { c.CloudflareOnly = parseNameList(v) })},
 		{"PROXDNX_CLOUDFLARE_PRUNE", b(func(c *Config, v bool) { c.CloudflarePrune = v })},
 		{"PROXDNX_LOG_FILE", str(func(c *Config, v string) { c.LogFile = v })},
 	}

@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -74,10 +75,11 @@ type Config struct {
 	APIToken   string // require this token on API/portal requests ("" = open)
 	APIAddr    string
 
-	CloudflareToken    string // Cloudflare API token; "" = tunnel sync off
-	CloudflareZone     string // public zone (e.g. example.com)
-	CloudflareTunnelID string // tunnel UUID; "" = auto-discover the first non-deleted tunnel
-	CloudflarePrune    bool   // prune managed DNS records/ingress that are no longer published
+	CloudflareToken    string   // Cloudflare API token; "" = tunnel sync off
+	CloudflareZone     string   // public zone (e.g. example.com)
+	CloudflareTunnelID string   // tunnel UUID; "" = auto-discover the first non-deleted tunnel
+	CloudflarePrune    bool     // prune managed DNS records/ingress that are no longer published
+	CloudflareOnly     []string // allowlist: only these slugs get public routes (empty = every app)
 	LogFile            string
 	Path               string // resolved config file path
 
@@ -189,8 +191,10 @@ func applyNameOverrides(recs []Record, names map[string]string) {
 
 // validRename checks a rename against the current record set: the key must
 // be a known slug, the new name a valid label, and it must not collide with
-// another app's slug. Returns an HTTP status + message.
-func validRename(recs []Record, names map[string]string, slug, name string) (int, string) {
+// another app's slug or a reserved static-infrastructure name (a colliding
+// site would fail `caddy validate` and break publication for every app).
+// Returns an HTTP status + message.
+func validRename(recs []Record, names map[string]string, slug, name string, reserved map[string]bool) (int, string) {
 	slug = strings.ToLower(strings.TrimSpace(slug))
 	name = normalizeName(name)
 	if slug == "" {
@@ -198,6 +202,9 @@ func validRename(recs []Record, names map[string]string, slug, name string) (int
 	}
 	if !nameRe.MatchString(name) {
 		return http.StatusBadRequest, "invalid name: use letters, digits and dashes"
+	}
+	if reserved[name] {
+		return http.StatusConflict, "name reserved for static infrastructure: " + name
 	}
 	known := false
 	for _, r := range recs {
@@ -242,11 +249,15 @@ func run(argv ...string) error {
 	return nil
 }
 
+// setupLogging opens the log file root-only: the startup log carries the
+// generated api_token, so a world-readable 0644 file would leak it to every
+// local account (an existing wider-mode file is tightened too).
 func setupLogging(path string) *log.Logger {
 	writers := []io.Writer{os.Stdout}
 	if path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-			if fh, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			if fh, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+				_ = os.Chmod(path, 0o600)
 				writers = append(writers, fh)
 			} else {
 				fmt.Fprintf(os.Stderr, "proxdnx: cannot open log file %s: %v (stdout only)\n", path, err)
@@ -303,6 +314,26 @@ func (c Config) validate() error {
 	if c.CloudflareToken != "" && strings.Trim(strings.TrimRight(c.CloudflareZone, "."), ".") == "" {
 		return fmt.Errorf("cloudflare_zone: required when cloudflare_token is set (apps publish <name>.<zone>)")
 	}
+	if c.CloudflareToken != "" {
+		// the portal becomes apps.<host>.<zone> — publicly reachable, so an
+		// open API must refuse to start rather than publish the inventory.
+		if c.APIToken == apiTokenOff {
+			return fmt.Errorf("api_token: %q refuses to start when cloudflare is enabled — apps.<host>.%s would be a public, open dashboard", apiTokenOff, c.CloudflareZone)
+		}
+		// tunnel ingress routes public names to caddy's plain-http twin
+		// (cfIngressTarget hardcodes :80): without it every public route 404s.
+		if !c.HTTP {
+			return fmt.Errorf("http: must be true when cloudflare is set — public names route to caddy's plain-http twin on :80")
+		}
+		if c.CloudflareTunnelID != "" && !tunnelIDRe.MatchString(c.CloudflareTunnelID) {
+			return fmt.Errorf("cloudflare_tunnel_id: not a tunnel UUID (%q)", c.CloudflareTunnelID)
+		}
+		for _, s := range c.CloudflareOnly {
+			if !nameRe.MatchString(s) {
+				return fmt.Errorf("cloudflare_only: invalid slug %q (letters, digits and dashes only)", s)
+			}
+		}
+	}
 	return nil
 }
 
@@ -356,6 +387,7 @@ func loadEffectiveConfig() (Config, error) {
 	}
 
 	once := fOnce
+	var flagErr error
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "url":
@@ -375,12 +407,10 @@ func loadEffectiveConfig() (Config, error) {
 		case "interval":
 			d, err := time.ParseDuration(fInterval)
 			if err != nil || d <= 0 {
-				err = fmt.Errorf("invalid --interval %q", fInterval)
+				flagErr = fmt.Errorf("invalid --interval %q", fInterval)
+				return
 			}
-			_ = err
-			if d > 0 {
-				c.Interval = d
-			}
+			c.Interval = d
 		case "caddy":
 			c.Caddy = fCaddy
 		case "http":
@@ -406,6 +436,9 @@ func loadEffectiveConfig() (Config, error) {
 		}
 	})
 	c.once = once
+	if flagErr != nil {
+		return c, flagErr
+	}
 
 	if err := c.validate(); err != nil {
 		return c, err
@@ -433,8 +466,11 @@ func secureHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Cache-Control", "no-store")
 		h.Set("X-Frame-Options", "DENY")
+		// form-action 'self': the token login form POSTs to /api/login —
+		// 'none' would block that submission in every CSP-enforcing browser
+		// and leave users no way in except disabling auth.
 		h.Set("Content-Security-Policy",
-			"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+			"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -517,6 +553,15 @@ func (a *App) requireToken(next http.Handler) http.Handler {
 	})
 }
 
+// tokenEqual compares two secrets without leaking their lengths: hashing
+// both sides first makes the constant-time compare operate on fixed-size
+// digests no matter what was submitted.
+func tokenEqual(a, b string) bool {
+	ha := sha256.Sum256([]byte(a))
+	hb := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
+}
+
 // authorized validates the session cookie, falling back to the header
 // channels for API clients.
 func (a *App) authorized(r *http.Request) bool {
@@ -530,7 +575,7 @@ func (a *App) authorized(r *http.Request) bool {
 	if tok == "" {
 		tok = r.Header.Get("X-API-Token")
 	}
-	return subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) == 1
+	return tokenEqual(tok, a.cfg.APIToken)
 }
 
 // routes builds the API handler tree. Separated from serveAPI so tests can
@@ -618,7 +663,7 @@ func (a *App) routes() http.Handler {
 		if a.names == nil {
 			a.names = map[string]string{}
 		}
-		status, msg := validRename(a.domains, a.names, in.Slug, in.Name)
+		status, msg := validRename(a.domains, a.names, in.Slug, in.Name, reservedNames(a.cfg))
 		if status != 0 {
 			a.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
@@ -680,7 +725,7 @@ func (a *App) routes() http.Handler {
 			return
 		}
 		tok := r.FormValue("token")
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) != 1 {
+		if !tokenEqual(tok, a.cfg.APIToken) {
 			time.Sleep(500 * time.Millisecond) // brute-force damping
 			http.Redirect(w, r, "/?failed=1", http.StatusSeeOther)
 			return
@@ -909,6 +954,12 @@ func main() {
 	}
 	logger := setupLogging(cfg.LogFile)
 	ensureAPIToken(&cfg, logger.Printf)
+	// belt and braces beyond validate(): the cloudflare sync publishes
+	// apps.<host>.<zone> publicly, so no effective token (explicit "none" or
+	// a failed generation) may ever pair with it.
+	if cfEnabled(cfg) && cfg.APIToken == "" {
+		fatalf("cloudflare sync is on but the API/portal has no token — refusing to expose apps.<host>.%s publicly; set api_token", strings.Trim(strings.TrimRight(cfg.CloudflareZone, "."), "."))
+	}
 	if host, _, splitErr := net.SplitHostPort(cfg.APIAddr); splitErr == nil && !loopbackHost(host) {
 		if cfg.APIToken != "" {
 			logger.Printf("api binds %s — token auth is enabled", cfg.APIAddr)

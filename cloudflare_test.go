@@ -281,6 +281,34 @@ func TestCloudflareSyncPruneConflictPreserve(t *testing.T) {
 	}
 }
 
+// TestCloudflareSyncAllowlist: cloudflare_only restricts public routes to the
+// listed slugs — everything else (here: sonarr) must not get DNS or ingress,
+// while the portal name always stays public.
+func TestCloudflareSyncAllowlist(t *testing.T) {
+	f := newFakeCF(t)
+	cfg := cfTestCfg()
+	cfg.CloudflareOnly = []string{"immich"}
+	st, err := cfSync(testPublish(), "10.4.2.99", cfg)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	host := hostLabel()
+	want := map[string]bool{"immich.kraftek.cloud": true, "apps." + host + ".kraftek.cloud": true}
+	if st.Count != len(want) {
+		t.Fatalf("count = %d, want %d (%+v)", st.Count, len(want), st)
+	}
+	for _, r := range f.dns["zone1"] {
+		if !want[r.Name] {
+			t.Fatalf("non-allowlisted record created: %+v", r)
+		}
+	}
+	for _, r := range f.configs["tunnel-uuid-1"] {
+		if r.Hostname != "" && !want[r.Hostname] {
+			t.Fatalf("non-allowlisted ingress rule: %+v", r)
+		}
+	}
+}
+
 func TestCloudflareSyncDeletedTunnel(t *testing.T) {
 	f := newFakeCF(t)
 	now := "2026-01-01T00:00:00Z"

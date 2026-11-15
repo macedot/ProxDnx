@@ -5,9 +5,46 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
+
+// TestDropReserved: slugs colliding with static-infrastructure names must be
+// dropped before rendering — a duplicate site address would fail `caddy
+// validate` and take every app's publication down with it.
+func TestDropReserved(t *testing.T) {
+	host := hostLabel()
+	sites := map[string]Record{
+		"immich": {Service: "Immich", IP: "10.0.0.5", Port: 2283},
+		"menux":  {Service: "Menux", IP: "10.0.0.6", Port: 80},
+		host:     {Service: "Twin", IP: "10.0.0.7", Port: 80},
+		"sonarr": {Service: "Sonarr", IP: "10.0.0.8", Port: 8989},
+	}
+	dropped := dropReserved(sites, Config{Static: true})
+	want := []string{"menux", host}
+	sort.Strings(want)
+	if fmt.Sprint(dropped) != fmt.Sprint(want) {
+		t.Fatalf("dropped = %v, want %v", dropped, want)
+	}
+	if _, ok := sites["menux"]; ok {
+		t.Error("menux must be dropped")
+	}
+	if _, ok := sites[host]; ok {
+		t.Error("host-label slug must be dropped")
+	}
+	if _, ok := sites["immich"]; !ok {
+		t.Error("immich must survive")
+	}
+	if _, ok := sites["sonarr"]; !ok {
+		t.Error("sonarr must survive")
+	}
+	// static off: no static names are rendered, nothing is reserved
+	sites2 := map[string]Record{"menux": {Service: "Menux", IP: "10.0.0.6", Port: 80}}
+	if d := dropReserved(sites2, Config{Static: false}); d != nil {
+		t.Errorf("static off must reserve nothing, dropped %v", d)
+	}
+}
 
 func TestDedupeSites(t *testing.T) {
 	recs := []Record{
