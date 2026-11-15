@@ -1,14 +1,16 @@
 package main
 
-// AdGuard Home DNS-rewrite sync: replicate every published name — app slugs
-// (<slug>.local), the portal (apps.<host>.local), static infra names and the
-// bare <host>.local — as an AdGuard DNS rewrite pointing at the host IP, so
-// any LAN client that uses AdGuard for DNS resolves the names without mDNS
-// (Android apps, clients with mDNS disabled, cached-off devices).
+// AdGuard Home DNS-rewrite sync: publish every app as <name>.<suffix>
+// (suffix REQUIRED, e.g. kraftek.cc) pointing at the host IP, so LAN clients
+// that use AdGuard for DNS resolve the names without mDNS. The portal is
+// published as apps.<host>.<suffix>. One rewrite per app — the .local names
+// stay out of AdGuard entirely (mDNS owns those, and the user spec is
+// <lxc>.<domain>, not a doubled listing).
 //
 // Enabled when adguard_url is set. Ownership rule for pruning: a rewrite is
-// managed by ProxDnx iff its answer is the host IP; rewrites pointing
-// elsewhere are user-created and are never touched.
+// managed by ProxDnx iff it lives under the configured suffix AND its answer
+// is the host IP; rewrites outside the suffix or pointing elsewhere are
+// user-created and are never touched.
 
 import (
 	"bytes"
@@ -30,44 +32,33 @@ type adguardRewrite struct {
 	Enabled bool   `json:"enabled"`
 }
 
-// adguardNames enumerates every published name, mirroring renderAliases (plus
-// the bare <host>.local, which avahi deliberately does not announce but
-// AdGuard can resolve) and adding <name>.<suffix> variants when a suffix is
-// configured.
+// adguardNames enumerates every AdGuard rewrite this daemon maintains:
+// <slug>.<suffix> per published app plus apps.<host>.<suffix> for the
+// portal. The suffix is required (config validation enforces it); an empty
+// suffix yields no names at all.
 func adguardNames(sites map[string]Record, cfg Config) []string {
+	suffix := strings.Trim(strings.TrimRight(cfg.AdguardSuffix, "."), ".")
+	if suffix == "" {
+		return nil
+	}
 	host := hostLabel()
 	set := map[string]bool{}
 	for s := range sites {
-		set[s+".local"] = true
+		set[s+"."+suffix] = true
 	}
-	set["apps."+host+".local"] = true
-	set[host+".local"] = true
-	if cfg.Static {
-		for _, r := range staticRoutes(host, cfg.BaseURL) {
-			for _, n := range r.Names {
-				set[n] = true
-			}
-		}
-	}
-	suffix := strings.Trim(strings.TrimRight(cfg.AdguardSuffix, "."), ".")
-	names := make([]string, 0, len(set)+len(set))
+	set["apps."+host+"."+suffix] = true
+	names := make([]string, 0, len(set))
 	for n := range set {
 		names = append(names, n)
-		if suffix != "" {
-			names = append(names, strings.TrimSuffix(n, ".local")+"."+suffix)
-		}
 	}
 	sort.Strings(names)
 	return names
 }
 
-// isManagedAdguardDomain reports whether a rewrite domain looks like one this
-// daemon would manage (.local, or the configured suffix). Used to bound
-// pruning; rewrites outside these suffixes are never touched.
+// isManagedAdguardDomain reports whether a rewrite domain lives under the
+// configured suffix — the only namespace this daemon manages. Rewrites
+// elsewhere (including .local, which mDNS owns) are never pruned.
 func isManagedAdguardDomain(domain, suffix string) bool {
-	if strings.HasSuffix(domain, ".local") {
-		return true
-	}
 	suffix = strings.Trim(strings.TrimRight(suffix, "."), ".")
 	return suffix != "" && strings.HasSuffix(domain, "."+suffix)
 }

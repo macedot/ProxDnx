@@ -102,10 +102,10 @@ The portal has a tab per DNS provider. **Local** is the default view (the
 domain you choose — a **domain is required** for each:
 
 - **AdGuard** — needs `adguard_url` + `adguard_user`/`adguard_password` +
-  `adguard_suffix`. Publishes `<name>.<suffix>` DNS rewrites pointing at the
-  host (caddy routes them with the same internal-CA TLS as `.local`), and
-  replicates every `.local` name so clients without mDNS (Android) resolve
-  too. Example: `adguard_suffix: home.lab` → `https://sonarr.home.lab`
+  `adguard_suffix`. Publishes one DNS rewrite per app, `<name>.<suffix>`
+  pointing at the host (caddy routes them with the same internal-CA TLS as
+  `.local`). Example: `adguard_suffix: kraftek.cc` → `https://sonarr.kraftek.cc`.
+  The `.local` names are not duplicated into AdGuard — mDNS owns those
 - **Cloudflare** — needs `cloudflare_token` + `cloudflare_zone`. Publishes
   `<name>.<zone>` publicly through a Cloudflare Tunnel (proxied CNAME +
   ingress rule → caddy), with the portal at `apps.<host>.<zone>`.
@@ -163,7 +163,7 @@ overwritten on upgrade. A fully annotated copy lives in
 | `autofix` | `false` | Opt-in self-healing: when `probe` tags a registration stale or mismatched, sweep well-known ports on the guest, identify the real app by its UI title, and correct the ProxMenux registration through its own API (`PUT /api/vms/<vmid>/apps/<id>`). Renames demote the registration to link-only. Max 2 attempts per registration. Requires `probe` |
 | `api_token` | *(auto-generated on first start)* | API/portal auth is on by default — like the Proxmox UI. On first start a random token is generated, stored in the config, and logged; present it via `Authorization: Bearer`, the `X-API-Token` header, `?token=`, or just open the portal and paste it into the token form. `/healthz` stays open. Constant-time compare. Set `api_token: "none"` to run an open API (loopback deployments) |
 | `api_addr` | `127.0.0.1:9973` | API listen address. Loopback by default; binding non-loopback logs a loud warning — pair it with `api_token` |
-| `adguard_url` / `adguard_user` / `adguard_password` | *(empty)* | **DNS provider: AdGuard** — setting `adguard_url` enables the AdGuard sync: every published name (plus `<name>.<adguard_suffix>`) becomes an AdGuard DNS rewrite pointing at the host, so mDNS-less clients (Android) resolve everything. `adguard_suffix` is **required** when `adguard_url` is set (apps publish `<name>.<suffix>`); `adguard_prune` removes rewrites of apps that disappear. User-owned rewrites (different answer) are never touched |
+| `adguard_url` / `adguard_user` / `adguard_password` | *(empty)* | **DNS provider: AdGuard** — setting `adguard_url` enables the AdGuard sync: every app is published as an AdGuard DNS rewrite `<name>.<adguard_suffix>` pointing at the host, so mDNS-less clients (Android) resolve everything. `adguard_suffix` is **required** when `adguard_url` is set (apps publish `<name>.<suffix>`); `adguard_prune` removes rewrites of apps that disappear. User-owned rewrites (different answer, or outside the suffix) are never touched |
 | `cloudflare_token` / `cloudflare_zone` / `cloudflare_tunnel_id` | *(empty)* | **DNS provider: Cloudflare Tunnel** — setting `cloudflare_token` + `cloudflare_zone` (required pair) publishes every app publicly as `<name>.<zone>`: a proxied CNAME to the tunnel plus an ingress rule routing it to caddy. The portal itself becomes `apps.<host>.<zone>`; infrastructure names are never published. `cloudflare_tunnel_id` empty = first non-deleted tunnel; `cloudflare_prune` removes stale managed records/rules; user-owned records claiming a desired name are reported as conflicts, never touched |
 | `log_file` | `/var/log/proxdnx/proxdnx.log` | Log file (also journald) |
 | `token` / `user` / `password` | *(empty)* | Optional ProxMenux auth (`PROXMENUX_TOKEN` env works too) |

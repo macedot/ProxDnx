@@ -131,16 +131,14 @@ func keys(m map[string]adguardRewrite) []string {
 
 func TestAdguardSyncAddsPublishedNames(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
-	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", Static: true, AdguardPrune: true}
+	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home", AdguardPrune: true}
 	answer := "10.4.2.99"
 	if _, err := applyAdguard(testPublish(), answer, cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	host := hostLabel()
 	want := []string{
-		"apps." + host + ".local", host + ".local",
-		"immich.local", "menux." + host + ".local", "menux.local",
-		"proxmenux.local", "sonarr.local",
+		"apps." + host + ".home", "immich.home", "sonarr.home",
 	}
 	got := keys(f.rewrites)
 	// adguardNames iterates a set — order is unspecified; compare sorted
@@ -151,6 +149,12 @@ func TestAdguardSyncAddsPublishedNames(t *testing.T) {
 	for _, k := range want {
 		if r := f.rewrites[k]; r.Answer != answer || !r.Enabled {
 			t.Fatalf("rewrite %s = %+v, want answer %s enabled", k, r, answer)
+		}
+	}
+	// the .local names belong to mDNS and must never enter AdGuard
+	for _, k := range []string{"sonarr.local", "immich.local", host + ".local"} {
+		if _, ok := f.rewrites[k]; ok {
+			t.Fatalf(".local name %s must not be published to AdGuard", k)
 		}
 	}
 }
@@ -170,7 +174,7 @@ func TestAdguardSyncSuffixVariants(t *testing.T) {
 
 func TestAdguardSyncIdempotent(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
-	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", Static: true, AdguardPrune: true}
+	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home", AdguardPrune: true}
 	for i := 0; i < 2; i++ {
 		if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 			t.Fatalf("sync %d: %v", i, err)
@@ -186,13 +190,13 @@ func TestAdguardSyncIdempotent(t *testing.T) {
 
 func TestAdguardSyncFixesDriftedAnswer(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
-	f.rewrites["sonarr.local"] = adguardRewrite{Domain: "sonarr.local", Answer: "1.2.3.4", Enabled: true}
-	f.order = append(f.order, "sonarr.local")
-	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: true}
+	f.rewrites["sonarr.home"] = adguardRewrite{Domain: "sonarr.home", Answer: "1.2.3.4", Enabled: true}
+	f.order = append(f.order, "sonarr.home")
+	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home", AdguardPrune: true}
 	if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if r := f.rewrites["sonarr.local"]; r.Answer != "10.4.2.99" {
+	if r := f.rewrites["sonarr.home"]; r.Answer != "10.4.2.99" {
 		t.Fatalf("drifted rewrite not fixed: %+v", r)
 	}
 	if f.updates != 1 {
@@ -203,19 +207,25 @@ func TestAdguardSyncFixesDriftedAnswer(t *testing.T) {
 func TestAdguardSyncPrunesOnlyManaged(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
 	answer := "10.4.2.99"
-	// stale managed rewrite (ours: .local + host answer) and a user-owned one
-	f.rewrites["removed-app.local"] = adguardRewrite{Domain: "removed-app.local", Answer: answer, Enabled: true}
-	f.rewrites["user-app.local"] = adguardRewrite{Domain: "user-app.local", Answer: "10.9.9.9", Enabled: true}
-	f.order = []string{"removed-app.local", "user-app.local"}
-	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: true}
+	// stale managed rewrite (ours: under the suffix + host answer), a
+	// user-owned one (different answer), and an old .local one — .local is
+	// mDNS territory and must survive even with the host answer
+	f.rewrites["removed-app.home"] = adguardRewrite{Domain: "removed-app.home", Answer: answer, Enabled: true}
+	f.rewrites["user-app.home"] = adguardRewrite{Domain: "user-app.home", Answer: "10.9.9.9", Enabled: true}
+	f.rewrites["old-app.local"] = adguardRewrite{Domain: "old-app.local", Answer: answer, Enabled: true}
+	f.order = []string{"removed-app.home", "user-app.home", "old-app.local"}
+	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home", AdguardPrune: true}
 	if _, err := applyAdguard(testPublish(), answer, cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if _, ok := f.rewrites["removed-app.local"]; ok {
+	if _, ok := f.rewrites["removed-app.home"]; ok {
 		t.Fatalf("stale managed rewrite was not pruned")
 	}
-	if _, ok := f.rewrites["user-app.local"]; !ok {
+	if _, ok := f.rewrites["user-app.home"]; !ok {
 		t.Fatalf("user-owned rewrite was deleted")
+	}
+	if _, ok := f.rewrites["old-app.local"]; !ok {
+		t.Fatalf(".local rewrite must never be pruned (mDNS territory)")
 	}
 	if f.deletes != 1 {
 		t.Fatalf("expected 1 delete, got %d", f.deletes)
@@ -224,13 +234,13 @@ func TestAdguardSyncPrunesOnlyManaged(t *testing.T) {
 
 func TestAdguardSyncPruneDisabled(t *testing.T) {
 	f, srv := newFakeAdguard(t, "admin", "secret")
-	f.rewrites["removed-app.local"] = adguardRewrite{Domain: "removed-app.local", Answer: "10.4.2.99", Enabled: true}
-	f.order = append(f.order, "removed-app.local")
-	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardPrune: false}
+	f.rewrites["removed-app.home"] = adguardRewrite{Domain: "removed-app.home", Answer: "10.4.2.99", Enabled: true}
+	f.order = append(f.order, "removed-app.home")
+	cfg := Config{AdguardURL: srv.URL, AdguardUser: "admin", AdguardPassword: "secret", AdguardSuffix: "home", AdguardPrune: false}
 	if _, err := applyAdguard(testPublish(), "10.4.2.99", cfg); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if _, ok := f.rewrites["removed-app.local"]; !ok {
+	if _, ok := f.rewrites["removed-app.home"]; !ok {
 		t.Fatalf("prune=false must not delete rewrites")
 	}
 }
@@ -266,9 +276,9 @@ func TestAPIAdguardEnabled(t *testing.T) {
 	app.cfg.AdguardURL = "http://127.0.0.1:1" // configured; the endpoint never dials AdGuard
 	app.cfg.AdguardUser = "u"
 	app.cfg.AdguardPassword = "p"
-	app.cfg.AdguardSuffix = "home"
+	app.cfg.AdguardSuffix = "kraftek.cc"
 	app.cfg.Static = false // keep the expected name set deterministic
-	app.adguard = AdguardStatus{Enabled: true, Synced: 8, At: time.Unix(1700000000, 0)}
+	app.adguard = AdguardStatus{Enabled: true, Synced: 3, At: time.Unix(1700000000, 0)}
 	resp, body := get(t, app.routes(), "/api/adguard")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -286,21 +296,22 @@ func TestAPIAdguardEnabled(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("body: %v (%s)", err, body)
 	}
-	if !out.Enabled || out.Count != 8 || len(out.Rewrites) != 8 {
+	if !out.Enabled || out.Count != 3 || len(out.Rewrites) != 3 {
 		t.Fatalf("enabled=%v count=%d rewrites=%d (%s)", out.Enabled, out.Count, len(out.Rewrites), body)
 	}
-	if out.Suffix != "home" || out.LastSync.Synced != 8 {
+	if out.Suffix != "kraftek.cc" || out.LastSync.Synced != 3 {
 		t.Fatalf("suffix=%q last_sync=%+v", out.Suffix, out.LastSync)
 	}
 	seen := map[string]bool{}
 	for _, r := range out.Rewrites {
 		seen[r.Domain] = true
+		if !strings.HasSuffix(r.Domain, ".kraftek.cc") {
+			t.Fatalf("rewrite outside the provider domain: %s", r.Domain)
+		}
 	}
 	host := hostLabel()
 	for _, d := range []string{
-		"sonarr.local", "immich.local",
-		"apps." + host + ".local", host + ".local",
-		"sonarr.home", "immich.home", "apps." + host + ".home", host + ".home",
+		"sonarr.kraftek.cc", "immich.kraftek.cc", "apps." + host + ".kraftek.cc",
 	} {
 		if !seen[d] {
 			t.Fatalf("missing rewrite %s (have %v)", d, body)

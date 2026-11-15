@@ -79,14 +79,14 @@ log_file: /var/log/proxdnx/proxdnx.log
 # Non-local providers publish every app as <name>.<domain>; a domain is
 # REQUIRED when a provider is on. The portal gets a tab per provider.
 
-# AdGuard Home DNS rewrites (LAN): <name>.<suffix> -> this host (caddy
-# routes by Host header, TLS via the local CA). Also replicates every
-# .local name so mDNS-less clients (Android) resolve.
+# AdGuard Home DNS rewrites (LAN): one rewrite per app, <name>.<suffix> ->
+# this host (caddy routes by Host header, TLS via the local CA). The
+# .local names are NOT duplicated here — mDNS owns those.
 # suffix is REQUIRED when adguard_url is set.
 adguard_url: ""            # e.g. http://10.4.2.2:3000
 adguard_user: ""
 adguard_password: ""
-adguard_suffix: ""         # e.g. home.lab  ->  sonarr.home.lab
+adguard_suffix: ""         # e.g. kraftek.cc  ->  sonarr.kraftek.cc
 adguard_prune: false       # remove rewrites of apps that disappeared
 
 # Cloudflare Tunnel (public): CNAME <name>.<zone> -> the tunnel, ingress
