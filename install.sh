@@ -266,6 +266,16 @@ scan: false
 api_token: ""
 api_addr: 127.0.0.1:9973
 log_file: /var/log/proxdnx/proxdnx.log
+# DNS providers (each publishes <name>.<suffix-or-zone>; suffix/zone REQUIRED)
+adguard_url: ""
+adguard_user: ""
+adguard_password: ""
+adguard_suffix: ""
+adguard_prune: false
+cloudflare_token: ""
+cloudflare_zone: ""
+cloudflare_tunnel_id: ""
+cloudflare_prune: false
 EOF
     )
     chmod 600 "$CONF"

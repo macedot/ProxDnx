@@ -74,3 +74,25 @@ api_addr: 127.0.0.1:9973
 
 # Log file (mirrored to stdout/journald).
 log_file: /var/log/proxdnx/proxdnx.log
+
+# ---- DNS providers ----------------------------------------------------
+# Non-local providers publish every app as <name>.<domain>; a domain is
+# REQUIRED when a provider is on. The portal gets a tab per provider.
+
+# AdGuard Home DNS rewrites (LAN): <name>.<suffix> -> this host (caddy
+# routes by Host header, TLS via the local CA). Also replicates every
+# .local name so mDNS-less clients (Android) resolve.
+# suffix is REQUIRED when adguard_url is set.
+adguard_url: ""            # e.g. http://10.4.2.2:3000
+adguard_user: ""
+adguard_password: ""
+adguard_suffix: ""         # e.g. home.lab  ->  sonarr.home.lab
+adguard_prune: false       # remove rewrites of apps that disappeared
+
+# Cloudflare Tunnel (public): CNAME <name>.<zone> -> the tunnel, ingress
+# rule -> this host's caddy plain-http twin. Infrastructure names are
+# never published. zone is REQUIRED when cloudflare_token is set.
+cloudflare_token: ""       # API token: Account:Read + Zone DNS:Edit + Tunnel edit
+cloudflare_zone: ""        # e.g. example.com  ->  sonarr.example.com
+cloudflare_tunnel_id: ""   # empty = first non-deleted tunnel in the account
+cloudflare_prune: false    # remove records/rules of apps that disappeared

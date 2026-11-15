@@ -211,9 +211,22 @@ func (c Config) validate() error {
 		return fmt.Errorf("api_addr: %v", err)
 	}
 	// time.NewTicker panics on non-positive intervals: a config typo like
-	// "interval: 0s" must refuse startup, not crash-loop under systemd.
+	// "interval: 0s" must refuse startup instead of crash-looping.
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval: must be positive (got %s)", c.Interval)
+	}
+	// DNS providers (spec: non-local providers publish <name>.<domain>,
+	// so a domain is required when the provider is on).
+	if c.AdguardURL != "" && strings.Trim(strings.TrimRight(c.AdguardSuffix, "."), ".") == "" {
+		return fmt.Errorf("adguard_suffix: required when adguard_url is set (apps publish <name>.<suffix>)")
+	}
+	if c.AdguardURL != "" {
+		if u, err := url.Parse(c.AdguardURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("adguard_url: must be an http(s) URL with a host (got %q)", c.AdguardURL)
+		}
+	}
+	if c.CloudflareToken != "" && strings.Trim(strings.TrimRight(c.CloudflareZone, "."), ".") == "" {
+		return fmt.Errorf("cloudflare_zone: required when cloudflare_token is set (apps publish <name>.<zone>)")
 	}
 	return nil
 }

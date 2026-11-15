@@ -64,10 +64,16 @@ const portalHTMLRaw = `<!doctype html>
   header h1 span{color:var(--accent)}
   header p{margin:0;color:var(--muted);font-size:13px}
   header .n{color:var(--accent);font-weight:700}
+  nav#tabs{display:flex;gap:6px;padding:14px 32px 0}
+  .tab{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--muted);font:600 13px system-ui,sans-serif;padding:8px 16px;cursor:pointer}
+  .tab:hover{color:var(--text)}
+  .tab.active{color:#fff;background:var(--accent);border-color:var(--accent)}
+  .tab[hidden]{display:none}
   main,#staticgrid,#adguardgrid,#cloudflaregrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
   main{padding:18px 32px 26px}
   section#static,section#adguard,section#cloudflare{padding:0 32px 30px}
   section#static h2,section#adguard h2,section#cloudflare h2{margin:0 0 12px;font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
+  main.hiddenview,section.hiddenview{display:none}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;transition:border-color .15s,transform .15s}
   .card:hover{border-color:var(--accent);transform:translateY(-1px)}
   .card a.domain{display:block;font-size:16px;font-weight:600;color:var(--link);text-decoration:none;word-break:break-word}
@@ -88,16 +94,21 @@ const portalHTMLRaw = `<!doctype html>
   <h1>🧭 Prox<span>Dnx</span></h1>
   <p><span class="n" id="n">…</span> published services · updated <span id="updated">…</span></p>
 </header>
+<nav id="tabs">
+  <button class="tab active" data-tab="local" onclick="showTab('local')">Local</button>
+  <button class="tab" data-tab="adguard" hidden onclick="showTab('adguard')">AdGuard</button>
+  <button class="tab" data-tab="cloudflare" hidden onclick="showTab('cloudflare')">Cloudflare</button>
+</nav>
 <main id="grid"><div class="empty">loading…</div></main>
-<section id="static" hidden>
+<section id="static">
   <h2>Infrastructure</h2>
   <div id="staticgrid"></div>
 </section>
-<section id="adguard" hidden>
+<section id="adguard" class="hiddenview">
   <h2>DNS rewrites · AdGuard</h2>
   <div id="adguardgrid"></div>
 </section>
-<section id="cloudflare" hidden>
+<section id="cloudflare" class="hiddenview">
   <h2>Public · Cloudflare Tunnel</h2>
   <div id="cloudflaregrid"></div>
 </section>
@@ -109,6 +120,18 @@ const TOKEN=new URLSearchParams(location.search).get("token")||"";
 function api(p){return TOKEN?p+"?token="+encodeURIComponent(TOKEN):p}
 if(TOKEN){document.querySelectorAll("footer a").forEach(a=>{a.href=a.getAttribute("href")+"?token="+encodeURIComponent(TOKEN)})}
 function proto(){return FORCE_HTTPS?"https:":location.protocol}
+// provider tabs: Local = app grid + infrastructure; the other tabs appear
+// only when the corresponding sync is enabled (their /api endpoints say so)
+let ACTIVE_TAB="local";
+function showTab(name){
+  ACTIVE_TAB=name;
+  document.querySelectorAll("#tabs .tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
+  const local=name==="local";
+  document.getElementById("grid").classList.toggle("hiddenview",!local);
+  document.getElementById("static").classList.toggle("hiddenview",!local);
+  document.getElementById("adguard").classList.toggle("hiddenview",name!=="adguard");
+  document.getElementById("cloudflare").classList.toggle("hiddenview",name!=="cloudflare");
+}
 async function load(){
   try{
     const d=await (await fetch(api("/api/domains"))).json();
@@ -150,7 +173,9 @@ async function loadAdguard(){
   try{
     const s=await (await fetch(api("/api/adguard"))).json();
     const sec=document.getElementById("adguard");
-    if(!s.enabled){sec.hidden=true;return}
+    const tab=document.querySelector('[data-tab="adguard"]');
+    if(!s.enabled){sec.classList.add("hiddenview");tab.hidden=true;if(ACTIVE_TAB==="adguard")showTab("local");return}
+    tab.hidden=false;
     const g=document.getElementById("adguardgrid");
     g.innerHTML="";
     (s.rewrites||[]).forEach(x=>{
@@ -172,7 +197,9 @@ async function loadCloudflare(){
   try{
     const s=await (await fetch(api("/api/cloudflare"))).json();
     const sec=document.getElementById("cloudflare");
-    if(!s.enabled){sec.hidden=true;return}
+    const tab=document.querySelector('[data-tab="cloudflare"]');
+    if(!s.enabled){sec.classList.add("hiddenview");tab.hidden=true;if(ACTIVE_TAB==="cloudflare")showTab("local");return}
+    tab.hidden=false;
     const g=document.getElementById("cloudflaregrid");
     g.innerHTML="";
     (s.routes||[]).forEach(x=>{
