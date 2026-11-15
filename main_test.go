@@ -473,7 +473,6 @@ func TestRequireToken(t *testing.T) {
 		t.Errorf("wrong token: %d, want 401", resp.StatusCode)
 	}
 	for name, req := range map[string]*http.Request{
-		"query":     mustReq(t, "/api/domains?token=s3cret"),
 		"bearer":    withHeader(mustReq(t, "/api/domains"), "Authorization", "Bearer s3cret"),
 		"apiheader": withHeader(mustReq(t, "/api/domains"), "X-API-Token", "s3cret"),
 	} {
@@ -481,6 +480,101 @@ func TestRequireToken(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Errorf("%s token: %d, want 200", name, resp.StatusCode)
 		}
+	}
+	// the URL channel is gone: a token in a query string must NOT authenticate
+	if resp, _ := get(t, h, "/api/domains?token=s3cret"); resp.StatusCode != 401 {
+		t.Errorf("query-token auth must be gone: %d, want 401", resp.StatusCode)
+	}
+}
+
+// getReqNoFollow is getReq without redirect following (for login flows).
+func getReqNoFollow(t *testing.T, h http.Handler, req *http.Request) (*http.Response, string) {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	var body io.Reader
+	if req.Body != nil {
+		b, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(b)
+	}
+	out, err := http.NewRequest(req.Method, srv.URL+req.URL.RequestURI(), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Header = req.Header.Clone()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(out)
+	if err != nil {
+		t.Fatalf("%s %s: %v", req.Method, req.URL, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
+}
+
+func TestLoginSessionFlow(t *testing.T) {
+	app := newTestApp(nil)
+	app.cfg.APIToken = "s3cret"
+	h := app.routes()
+
+	// wrong token: redirect back, no session cookie
+	req, _ := http.NewRequest(http.MethodPost, "http://api/api/login", strings.NewReader("token=wrong"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, _ := getReqNoFollow(t, h, req)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("failed login: %d, want 303", resp.StatusCode)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			t.Error("failed login must not set a session cookie")
+		}
+	}
+
+	// correct token: 303 + session cookie, then the cookie authenticates
+	req, _ = http.NewRequest(http.MethodPost, "http://api/api/login", strings.NewReader("token=s3cret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, _ = getReqNoFollow(t, h, req)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login: %d, want 303", resp.StatusCode)
+	}
+	var sess *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			sess = c
+		}
+	}
+	if sess == nil {
+		t.Fatal("login must set the session cookie")
+	}
+	if !sess.HttpOnly {
+		t.Error("session cookie must be HttpOnly")
+	}
+	req, _ = http.NewRequest(http.MethodGet, "http://api/api/domains", nil)
+	req.AddCookie(sess)
+	if resp, _ = getReq(t, h, req); resp.StatusCode != 200 {
+		t.Errorf("session cookie must authenticate: %d", resp.StatusCode)
+	}
+	req, _ = http.NewRequest(http.MethodGet, "http://api/", nil)
+	req.Header.Set("Accept", "text/html")
+	req.AddCookie(sess)
+	resp, _ = getReq(t, h, req)
+	if resp.StatusCode != 200 {
+		t.Errorf("portal with session: %d, want 200", resp.StatusCode)
+	}
+
+	// tampered session id: rejected
+	req, _ = http.NewRequest(http.MethodGet, "http://api/api/domains", nil)
+	bad := *sess
+	bad.Value = sess.Value[:8] + "tampered"
+	req.AddCookie(&bad)
+	if resp, _ = getReq(t, h, req); resp.StatusCode != 401 {
+		t.Errorf("tampered session must 401, got %d", resp.StatusCode)
 	}
 }
 

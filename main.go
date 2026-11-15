@@ -124,6 +124,9 @@ type App struct {
 	names     map[string]string // slug -> renamed slug (user-edited URLs)
 	namesPath string
 	cycleBusy atomic.Bool
+
+	sessions map[string]time.Time // cookie session id -> expiry
+	sessMu   sync.Mutex
 }
 
 // nameRe is the charset a user-edited slug may use: a valid DNS label.
@@ -327,7 +330,7 @@ func loadEffectiveConfig() (Config, error) {
 	fs.BoolVar(&fAutoFix, "autofix", false, "correct stale/mismatched ProxMenux registrations via its API (default: config/autofix, off; requires probe)")
 	fs.BoolVar(&fScan, "scan", false, "force fresh docker/native discovery scans (POST) each cycle")
 	fs.StringVar(&fAPI, "api-addr", "", "HTTP API listen address (default 127.0.0.1:9973)")
-	fs.StringVar(&fAPIToken, "api-token", "", "require this token on API/portal requests: Authorization: Bearer, X-API-Token header or ?token= (env PROXDNX_API_TOKEN)")
+	fs.StringVar(&fAPIToken, "api-token", "", "require this token on API/portal requests: browsers log in via the form (session cookie), API clients send Authorization: Bearer or X-API-Token (env PROXDNX_API_TOKEN)")
 	fs.StringVar(&fLog, "log-file", "", "log file (default /var/log/proxdnx/proxdnx.log)")
 	fs.BoolVar(&fOnce, "once", false, "run a single cycle and exit")
 	fs.BoolVar(&fVersion, "version", false, "print version and exit")
@@ -436,39 +439,98 @@ func secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// requireToken enforces the optional api_token. Accepted: Authorization:
-// Bearer, X-API-Token header, or ?token= query parameter (so the portal can
-// be bookmarked as apps.<host>.local/?token=...). /healthz stays open for
-// monitoring and container healthchecks. Compare is constant-time; an empty
-// configured token disables auth entirely (loopback deployments).
+// sessionCookieName / sessionTTL: browser sessions issued by POST
+// /api/login after a correct api_token. HttpOnly — the token itself never
+// touches a URL, and JS can't read the cookie.
+const (
+	sessionCookieName = "pndx_session"
+	sessionTTL        = 30 * 24 * time.Hour
+)
+
+// newSession issues a fresh session id and prunes expired ones.
+func (a *App) newSession() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	id := base64.RawURLEncoding.EncodeToString(b)
+	if a.sessions == nil {
+		a.sessions = map[string]time.Time{}
+	}
+	now := time.Now()
+	for sid, exp := range a.sessions {
+		if now.After(exp) {
+			delete(a.sessions, sid)
+		}
+	}
+	a.sessions[id] = now.Add(sessionTTL)
+	return id, nil
+}
+
+// validSession reports whether a session id is live, sliding its expiry.
+func (a *App) validSession(id string) bool {
+	if id == "" {
+		return false
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	exp, ok := a.sessions[id]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(a.sessions, id)
+		return false
+	}
+	a.sessions[id] = time.Now().Add(sessionTTL)
+	return true
+}
+
+// requireToken enforces the optional api_token. Browsers log in once via
+// the form (POST /api/login) and keep an HttpOnly session cookie — the
+// token never travels in a URL. API clients present Authorization: Bearer
+// or X-API-Token. /healthz and the login endpoint itself stay open.
+// Compare is constant-time; an empty configured token disables auth.
 func (a *App) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg.APIToken != "" && r.URL.Path != "/healthz" {
-			tok := r.URL.Query().Get("token")
-			if tok == "" {
-				if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-					tok = strings.TrimPrefix(h, "Bearer ")
+		loginPath := r.URL.Path == "/api/login" && r.Method == http.MethodPost
+		if a.cfg.APIToken != "" && r.URL.Path != "/healthz" && !loginPath && !a.authorized(r) {
+			if r.URL.Path == "/" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+				// browser: serve the token form instead of raw JSON
+				form := authFormHTML
+				if r.URL.Query().Get("failed") == "1" {
+					form = strings.Replace(form, "__LOGIN_FAILED__", `<p class="err">wrong token — try again</p>`, 1)
+				} else {
+					form = strings.Replace(form, "__LOGIN_FAILED__", "", 1)
 				}
-			}
-			if tok == "" {
-				tok = r.Header.Get("X-API-Token")
-			}
-			if subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) != 1 {
-				if r.URL.Path == "/" && strings.Contains(r.Header.Get("Accept"), "text/html") {
-					// browser: serve the token form instead of raw JSON
-					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					w.WriteHeader(http.StatusUnauthorized)
-					_, _ = io.WriteString(w, authFormHTML)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = io.WriteString(w, `{"error":"unauthorized: present api_token via Authorization: Bearer, X-API-Token or ?token="}`)
+				_, _ = io.WriteString(w, form)
 				return
 			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"unauthorized: log in at / or present api_token via Authorization: Bearer or X-API-Token"}`)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authorized validates the session cookie, falling back to the header
+// channels for API clients.
+func (a *App) authorized(r *http.Request) bool {
+	if c, err := r.Cookie(sessionCookieName); err == nil && a.validSession(c.Value) {
+		return true
+	}
+	tok := ""
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		tok = strings.TrimPrefix(h, "Bearer ")
+	}
+	if tok == "" {
+		tok = r.Header.Get("X-API-Token")
+	}
+	return subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) == 1
 }
 
 // routes builds the API handler tree. Separated from serveAPI so tests can
@@ -606,6 +668,38 @@ func (a *App) routes() http.Handler {
 		a.triggerCycle()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true}`)
+	})
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.APIToken == "" {
+			// auth disabled — nothing to log in to
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		tok := r.FormValue("token")
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.APIToken)) != 1 {
+			time.Sleep(500 * time.Millisecond) // brute-force damping
+			http.Redirect(w, r, "/?failed=1", http.StatusSeeOther)
+			return
+		}
+		id, err := a.newSession()
+		if err != nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    id,
+			Path:     "/",
+			MaxAge:   int(sessionTTL.Seconds()),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		})
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

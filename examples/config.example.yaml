@@ -63,9 +63,9 @@ scan: false
 
 # Optional API/portal auth — ON by default: when empty, a random token is
 # generated on first start, stored in this file and printed to the startup
-# log; every portal/API request then requires it (Authorization: Bearer,
-# X-API-Token or ?token=; /healthz stays open). Set "none" to run an open
-# API (loopback deployments).
+# log. Browsers log in via the form and keep a 30-day HttpOnly session
+# cookie; API clients send Authorization: Bearer or X-API-Token
+# (/healthz stays open). Set "none" to run an open API (loopback).
 api_token: ""
 
 # API listen address. 127.0.0.1 is the safe default; a non-loopback bind

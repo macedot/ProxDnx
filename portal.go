@@ -20,11 +20,13 @@ func portalHTML(force bool) string {
 }
 
 // authFormHTML is served to browsers that hit the portal without a valid
-// token: submit redirects to /?token=… which requireToken accepts.
+// session: it POSTs the token to /api/login, which sets an HttpOnly session
+// cookie — the token itself never appears in any URL. __LOGIN_FAILED__ is
+// replaced with an error note when the last login attempt was rejected.
 const authFormHTML = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- no-referrer: the portal URL may carry ?token=; never leak it to app origins -->
+<!-- no-referrer: never leak the portal origin to app targets -->
 <meta name="referrer" content="no-referrer">
 <title>ProxDnx · access token</title>
 <style>
@@ -37,12 +39,13 @@ button{width:100%;margin-top:10px;background:#E64804;border:0;border-radius:8px;
 button:hover{filter:brightness(1.1)}
 .h{font-size:12px;margin-top:14px}
 </style></head><body>
-<form onsubmit="location.search='?token='+encodeURIComponent(document.getElementById('t').value);return false">
+<form method="post" action="/api/login">
   <h1>🧭 Prox<span>Dnx</span></h1>
   <p>This dashboard requires an access token.</p>
-  <input id="t" type="password" autocomplete="off" autofocus placeholder="access token">
+  <input name="token" type="password" autocomplete="off" autofocus placeholder="access token">
   <button type="submit">Open dashboard</button>
-  <p class="h">The token is the <b>api_token</b> line of the server config (on first start it is generated and printed to the startup log).</p>
+  __LOGIN_FAILED__
+  <p class="h">The token is the <b>api_token</b> line of the server config (on first start it is generated and printed to the startup log). You stay logged in for 30 days.</p>
 </form>
 </body></html>
 `
@@ -52,7 +55,7 @@ const portalHTMLRaw = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- no-referrer: the portal URL may carry ?token=; never leak it to app origins -->
+<!-- no-referrer: never leak the portal origin to app targets -->
 <meta name="referrer" content="no-referrer">
 <title>ProxDnx · published services</title>
 <style>
@@ -117,9 +120,7 @@ const portalHTMLRaw = `<!doctype html>
 <script>
 function esc(s){const d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
 const FORCE_HTTPS=__FORCE_HTTPS__;
-const TOKEN=new URLSearchParams(location.search).get("token")||"";
-function api(p){return TOKEN?p+"?token="+encodeURIComponent(TOKEN):p}
-if(TOKEN){document.querySelectorAll("footer a").forEach(a=>{a.href=a.getAttribute("href")+"?token="+encodeURIComponent(TOKEN)})}
+function api(p){return p}
 function proto(){return FORCE_HTTPS?"https:":location.protocol}
 // click-to-edit: rename the published URL (service name never changes);
 // auto-refresh pauses while an edit is open
