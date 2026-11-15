@@ -194,9 +194,11 @@ async function loadStatic(){
     g.innerHTML="";
     (s.routes||[]).forEach(r=>{
       const c=document.createElement("div");c.className="card";
+      // same anatomy as an app card: domain link, service line, chip row
       c.innerHTML='<a class="domain" target="_blank" rel="noopener noreferrer" href="'+proto()+'//'+esc(r.names[0])+'/">'+esc(r.label)+'</a>'
-        +'<div class="svc">'+esc(r.desc)+' → <b style="color:var(--text)">'+esc(r.upstream)+'</b></div>'
-        +'<div class="chips">'+(r.names||[]).map(n=>'<span class="chip">🏷 <b>'+esc(n)+'</b></span>').join("")+'</div>';
+        +'<div class="svc">'+esc(r.desc)+'</div>'
+        +'<div class="chips"><span class="chip">🖥 <b>'+esc(r.upstream)+'</b></span>'
+        +(r.names||[]).map(n=>'<span class="chip">🏷 <b>'+esc(n)+'</b></span>').join("")+'</div>';
       g.appendChild(c);
     });
     sec.hidden=false;
