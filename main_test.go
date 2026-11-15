@@ -812,10 +812,15 @@ func TestPortalHTML(t *testing.T) {
 	if n := strings.Count(off, `target="_blank"`); n < 2 {
 		t.Errorf("service URLs (app + static cards) must open in a new tab, found %d target=_blank sites", n)
 	}
-	// editing is a double-click on the card rectangle, guarded so a
-	// double-click on the link itself still just follows the link
-	if !strings.Contains(off, `ondblclick`) || !strings.Contains(off, `closest("a")`) {
-		t.Error("portal must trigger the URL edit via card ondblclick (skipping link targets)")
+	// editing is a double-click on the card rectangle, detected via the
+	// click counter (steadier than the native dblclick event) and guarded
+	// so links and the edit row are exempt
+	if !strings.Contains(off, `ev.detail===2`) || !strings.Contains(off, `closest("a")`) {
+		t.Error("portal must trigger the URL edit via ev.detail===2 on the card (skipping link targets)")
+	}
+	// keyboard: Enter confirms, Escape discards while editing
+	if !strings.Contains(off, `key==="Enter"`) || !strings.Contains(off, `key==="Escape"`) {
+		t.Error("edit input must map Enter to save and Escape to discard")
 	}
 	// the URL may carry ?token= — cross-origin navigation must never carry it
 	if !strings.Contains(off, `<meta name="referrer" content="no-referrer">`) {

@@ -71,7 +71,7 @@ const portalHTMLRaw = `<!doctype html>
   main{padding:18px 32px 26px}
   section#static{padding:0 32px 30px}
   section#static h2{margin:0 0 12px;font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;transition:border-color .15s,transform .15s}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;transition:border-color .15s,transform .15s;-webkit-user-select:none;user-select:none}
   .card:hover{border-color:var(--accent);transform:translateY(-1px)}
   .card a.domain{display:block;font-size:16px;font-weight:600;color:var(--link);text-decoration:none;word-break:break-word}
   .card a.domain:hover{text-decoration:underline}
@@ -83,7 +83,7 @@ const portalHTMLRaw = `<!doctype html>
   .chip.warn{color:#ffb86b;border-color:#7a5c2a;background:#2a2318}
   .card.dim{opacity:.55}
   .editrow{margin-top:10px}
-  .nameinput{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .nameinput{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;font:14px ui-monospace,SFMono-Regular,Menlo,monospace;-webkit-user-select:text;user-select:text}
   .editactions{display:flex;gap:6px;margin-top:8px}
   .ebtn{background:#262a30;border:1px solid var(--border);border-radius:6px;color:var(--muted);font:12px system-ui,sans-serif;padding:5px 10px;cursor:pointer}
   .ebtn:hover{color:var(--text)}
@@ -133,6 +133,10 @@ function startEdit(card,x,link){
     EDITING=false;load();
   };
   cancel.onclick=()=>{EDITING=false;load();};
+  inp.onkeydown=(ev)=>{
+    if(ev.key==="Enter"){ev.preventDefault();save.onclick();}
+    else if(ev.key==="Escape"){ev.preventDefault();cancel.onclick();}
+  };
   actions.append(save,def,cancel);
   link.replaceWith(inp);
   card.appendChild(actions);
@@ -160,7 +164,12 @@ async function load(){
       ch.innerHTML='<span class="chip">🖥 <b>'+esc(x.name)+'</b></span><span class="chip"><b>'+esc(x.ip)+'</b>:'+esc(x.port)+'</span>';
       c.appendChild(ch);
       c.title="double-click to edit the URL name";
-      c.ondblclick=(ev)=>{if(ev.target.closest("a"))return;startEdit(c,x,link)};
+      // click-count detection (ev.detail===2) is steadier than the native
+      // dblclick event; links and the edit row are exempt
+      c.addEventListener("click",(ev)=>{
+        if(ev.target.closest("a")||ev.target.closest(".editrow"))return;
+        if(ev.detail===2)startEdit(c,x,link);
+      });
       g.appendChild(c);
     });
     document.getElementById("n").textContent=d.count;
